@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "id": "kshitij.herald",
+  "name": "Herald",
+  "version": "0.1.0",
+  "author": "Kshitij Bohara",
+  "description": "Fast keyboard-first RSS and Hacker News reader with a daily digest",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "keepLoaded": true,
+  "barWidget": {
+    "displayName": "Herald",
+    "description": "Headlines from your feeds and Hacker News",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "feeds": "hn:top:30\nhttps://hackernewsrss.com/feed.xml",
+      "refreshMinutes": "15",
+      "tickerSeconds": "6",
+      "storyCount": "30",
+      "maxItemsPerFeed": "30",
+      "digestTime": "09:00",
+      "aiEnabled": false,
+      "aiCommand": "ollama run llama3.1",
+      "showScores": true
+    },
+    "schema": [
+      {
+        "key": "feeds",
+        "type": "string",
+        "label": "Feeds",
+        "description": "One source per line: an RSS/Atom/JSON feed URL, or hn:top, hn:best, hn:new, hn:ask, hn:show, hn:jobs with an optional :count suffix."
+      },
+      {
+        "key": "refreshMinutes",
+        "type": "string",
+        "label": "Refresh interval (minutes)",
+        "description": "How often feeds are fetched in the background. Minimum 2."
+      },
+      {
+        "key": "tickerSeconds",
+        "type": "string",
+        "label": "Headline rotation (seconds)",
+        "description": "How often the bar pill cycles to the next headline. 0 disables rotation."
+      },
+      {
+        "key": "storyCount",
+        "type": "string",
+        "label": "Stories per HN feed",
+        "description": "How many stories to fetch for each hn: source."
+      },
+      {
+        "key": "maxItemsPerFeed",
+        "type": "string",
+        "label": "Items per RSS feed",
+        "description": "How many recent items to keep from each RSS/Atom feed."
+      },
+      {
+        "key": "digestTime",
+        "type": "string",
+        "label": "Daily digest time",
+        "description": "24-hour HH:MM for the morning briefing notification. Empty disables it."
+      },
+      {
+        "key": "aiEnabled",
+        "type": "boolean",
+        "label": "AI summaries",
+        "description": "Show a Summarize action that pipes article text to your local AI command. Off by default; article text never leaves your machine unless you enable it.",
+        "defaultValue": false
+      },
+      {
+        "key": "aiCommand",
+        "type": "string",
+        "label": "AI command",
+        "description": "Shell command that reads article text on stdin and prints a short summary, e.g. ollama run llama3.1."
+      },
+      {
+        "key": "showScores",
+        "type": "boolean",
+        "label": "Show scores",
+        "description": "Show HN points and comment counts beside each story.",
+        "defaultValue": true
+      }
+    ]
+  }
+}
