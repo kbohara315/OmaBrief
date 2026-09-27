@@ -202,12 +202,18 @@ hn_items() { # kind count feedlabel outfile
   args=()
   for id in $ids; do
     f="$STATE/hn/$id.json"
-    if [ ! -s "$f" ]; then args+=(-o "$f" "$HN_API/item/$id.json"); fi
+    if [ ! -s "$f" ]; then args+=(-o "$f.part-$$" "$HN_API/item/$id.json"); fi
   done
   if [ "${#args[@]}" -gt 0 ]; then
     # shellcheck disable=SC2086
     curl -sS --max-time 25 --parallel --parallel-max 8 -A "$UA" --compressed "${args[@]}" >>"$STATE/fetch.log" 2>&1 || true
   fi
+  # Publish atomically so parallel poll jobs never read a partial item.
+  for id in $ids; do
+    f="$STATE/hn/$id.json"
+    pf="$f.part-$$"
+    if [ -s "$pf" ] && [ ! -s "$f" ]; then mv -f "$pf" "$f"; else rm -f "$pf"; fi
+  done
   : >"$tmp.items"
   for id in $ids; do
     f="$STATE/hn/$id.json"
@@ -228,42 +234,57 @@ hn_items() { # kind count feedlabel outfile
 
 # ------------------------------------------------------------------ poll ---
 
+fetch_source() { # line index : fetch+parse ONE source into .src.N.json ; exit 1 on failure
+  local line="$1" n="$2" kind count feed raw
+  case "$line" in
+    hn:*)
+      kind=$(printf '%s' "$line" | cut -d: -f2)
+      count=$(printf '%s' "$line" | cut -d: -f3)
+      case "$kind" in top|best|new|ask|show|job) ;; *) kind="top" ;; esac
+      case "$count" in ''|*[!0-9]*) count="$STORY_COUNT" ;; esac
+      hn_items "$kind" "$count" "HN $kind" "$STATE/.src.$n.json" || return 1
+      ;;
+    *)
+      raw=$(fetch_url "$line" "rss")
+      [ -n "$raw" ] || return 1
+      feed=$(printf '%s' "$line" | sed 's#https\?://##; s#/.*##')
+      if head -c 200 "$raw" | grep -q '"version"[[:space:]]*:[[:space:]]*"https://jsonfeed.org'; then
+        parse_jsonfeed "$raw" "$feed" "$MAX_PER_FEED" "$STATE/.src.$n.json"
+      else
+        parse_rss "$raw" "$feed" "$MAX_PER_FEED" "$STATE/.src.$n.json"
+      fi
+      ;;
+  esac
+}
+
 do_poll() {
   read_config
-  local feeds="$STATE/feeds.txt" errors=0 parts=() n=0 line src kind count feed root raw
+  local feeds="$STATE/feeds.txt" errors=0 parts=() n=0 line
   [ -f "$feeds" ] || { printf '[]' | atomic_write "$STATE/items.json"; return 0; }
+  # Phase 1: fetch+parse every source with at most 8 in flight. One network
+  # round per source instead of one round per item (HN) or per feed (RSS).
+  local running=0
+  declare -A seen_source=()
   while IFS= read -r line || [ -n "$line" ]; do
     line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
     case "$line" in ''|\#*) continue ;; esac
+    [ -n "${seen_source["$line"]:-}" ] && continue
+    seen_source["$line"]=1
     n=$((n + 1))
-    case "$line" in
-      hn:*)
-        kind=$(printf '%s' "$line" | cut -d: -f2)
-        count=$(printf '%s' "$line" | cut -d: -f3)
-        case "$kind" in top|best|new|ask|show|job) ;; *) kind="top" ;; esac
-        case "$count" in ''|*[!0-9]*) count="$STORY_COUNT" ;; esac
-        hn_items "$kind" "$count" "HN $kind" "$STATE/.src.$n.json" \
-          || { printf '[]' | atomic_write "$STATE/.src.$n.json"; errors=$((errors + 1)); }
-        ;;
-      *)
-        raw=$(fetch_url "$line" "rss")
-        if [ -n "$raw" ]; then
-          feed=$(printf '%s' "$line" | sed 's#https\?://##; s#/.*##')
-          if head -c 200 "$raw" | grep -q '"version"[[:space:]]*:[[:space:]]*"https://jsonfeed.org'; then
-            parse_jsonfeed "$raw" "$feed" "$MAX_PER_FEED" "$STATE/.src.$n.json"
-          else
-            parse_rss "$raw" "$feed" "$MAX_PER_FEED" "$STATE/.src.$n.json"
-          fi
-        else
-          printf '[]' | atomic_write "$STATE/.src.$n.json"; errors=$((errors + 1))
-        fi
-        ;;
-    esac
+    fetch_source "$line" "$n" >>"$STATE/fetch.log" 2>&1 &
+    running=$((running + 1))
+    if [ "$running" -ge 8 ]; then wait -n; running=$((running - 1)); fi
     parts+=("$STATE/.src.$n.json")
   done <"$feeds"
+  wait
+  # Phase 2: merge. Sources that failed keep no file; count them as errors.
+  local merged=()
+  for f in ${parts[@]+"${parts[@]}"}; do
+    if [ -s "$f" ]; then merged+=("$f"); else printf '[]' >"$f"; errors=$((errors + 1)); fi
+  done
   if [ "$n" -eq 0 ]; then printf '[]' | atomic_write "$STATE/items.json"; else
     jq -s '[.[].[]] | unique_by(.id) | sort_by(.published) | reverse | .[0:500]' \
-      "${parts[@]}" 2>/dev/null | atomic_write "$STATE/items.json" \
+      "${merged[@]}" 2>/dev/null | atomic_write "$STATE/items.json" \
       || printf '[]' | atomic_write "$STATE/items.json"
   fi
   rm -f "$STATE"/.src.*.json
