@@ -280,38 +280,58 @@ clean_html() { # stdin -> plain text; entity-aware via libxml2
     | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//' | head -c 4000
 }
 
-fetch_kid() { # id depth outfile (recursive, depth<=2, breadth-limited)
-  local id="$1" depth="$2" out="$3" f item kids kid k kcount tmp
-  f="$STATE/hn/$id.json"
-  [ -s "$f" ] || curl -sS --max-time 15 -A "$UA" --compressed -o "$f" "$HN_API/item/$id.json" 2>>"$STATE/fetch.log" || return 0
-  item=$(jq -c 'select(. != null and .deleted != true and .dead != true)' "$f" 2>/dev/null) || return 0
-  [ -n "$item" ] || return 0
-  tmp="$(mktemp "$STATE/.tmp.XXXXXX")" || return 1
-  : >"$tmp.kids"
-  if [ "$depth" -lt 2 ]; then
-    kids=$(printf '%s' "$item" | jq -r '.kids // [] | .[0:12][]' 2>/dev/null) || kids=""
-    kcount=0
-    for kid in $kids; do
-      [ "$kcount" -ge 12 ] && break
-      k="$(mktemp "$STATE/.tmp.XXXXXX")"
-      fetch_kid "$kid" $((depth + 1)) "$k" && cat "$k" >>"$tmp.kids"
-      rm -f "$k"
-      kcount=$((kcount + 1))
-    done
+fetch_ids() { # id... : fetch any missing HN items in ONE parallel batch
+  local args=() id
+  for id in "$@"; do
+    case "$id" in ''|*[!0-9]*) continue ;; esac
+    [ -s "$STATE/hn/$id.json" ] || args+=(-o "$STATE/hn/$id.json" "$HN_API/item/$id.json")
+  done
+  if [ "${#args[@]}" -gt 0 ]; then
+    # shellcheck disable=SC2086
+    curl -sS --max-time 25 --parallel --parallel-max 8 -A "$UA" --compressed "${args[@]}" >>"$STATE/fetch.log" 2>&1 || true
   fi
-  {
-    printf '%s' "$item" | jq --argjson depth "$depth" '{id, by: (.by // "?"), time: (.time // 0), text: (.text // ""), score: (.score // 0), depth: $depth}'
-  } >"$tmp.self"
-  jq -s --slurpfile kids "$tmp.kids" '.[0] + {kids: $kids}' "$tmp.self" 2>/dev/null >"$out" \
-    || printf '{"by":"?","text":"","kids":[]}' >"$out"
-  rm -f "$tmp.self" "$tmp.kids" "$tmp"
+}
+
+kids_of() { # id limit : prints kid ids, one per line
+  local f="$STATE/hn/$1.json"
+  [ -s "$f" ] || return 0
+  jq -r --argjson n "$2" '.kids // [] | .[0:$n][]' "$f" 2>/dev/null || true
 }
 
 do_comments() { # HNID ; prints thread json path
-  local id="$1" tmp out raw_text
+  local id="$1" tmp out raw_text f
   tmp="$(mktemp "$STATE/.tmp.XXXXXX")" || exit 1
   out="$STATE/thread-$id.json"
-  fetch_kid "$id" 0 "$tmp.thread"
+  # Breadth-first, three parallel batches: story, <=12 top kids, <=5 nested each.
+  fetch_ids "$id"
+  : >"$tmp.l1"
+  kids_of "$id" 12 >"$tmp.l1"
+  # shellcheck disable=SC2013,SC2046
+  fetch_ids $(cat "$tmp.l1")
+  : >"$tmp.l2"
+  # shellcheck disable=SC2013
+  for f in $(cat "$tmp.l1"); do kids_of "$f" 5 >>"$tmp.l2"; done
+  sort -u "$tmp.l2" -o "$tmp.l2"
+  # shellcheck disable=SC2046
+  fetch_ids $(cat "$tmp.l2")
+  # Assemble the nested thread from cache with one jq pass (no network).
+  : >"$tmp.flist"
+  for f in "$id" $(cat "$tmp.l1" "$tmp.l2"); do
+    [ -s "$STATE/hn/$f.json" ] && printf '%s\n' "$STATE/hn/$f.json" >>"$tmp.flist"
+  done
+  # shellcheck disable=SC2046
+  jq -s 'map(select(. != null and .id != null) | {(.id|tostring): .}) | add // {}' \
+    $(cat "$tmp.flist") 2>/dev/null >"$tmp.byid" || printf '{}' >"$tmp.byid"
+  jq --argjson rootid "$id" --slurpfile d "$tmp.byid" -n '
+    ($d[0]) as $dict
+    | def node($nid; $depth):
+        ($dict[$nid|tostring]) as $me
+        | select($me != null and $me.deleted != true and $me.dead != true)
+        | (if $depth == 0 then 12 else 5 end) as $b
+        | {id: $me.id, by: ($me.by // "?"), time: ($me.time // 0),
+           text: ($me.text // ""), score: ($me.score // 0), depth: $depth,
+           kids: [$me.kids // [] | .[0:$b][] | node(tostring; $depth + 1)]};
+      node($rootid; 0)' 2>/dev/null >"$tmp.thread" || printf '{}' >"$tmp.thread"
   jq -c '.' "$tmp.thread" 2>/dev/null >"$tmp.compact" || printf '{}' >"$tmp.compact"
   # Clean every distinct text field through libxml2 (entity + tag aware).
   jq -c '.. | objects | .text // empty' "$tmp.compact" | sort -u >"$tmp.uniq"
