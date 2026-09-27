@@ -181,7 +181,13 @@ Item {
       root.refreshing = false
       itemsFile.reload()
       statusFile.reload()
+      prefetchProc.command = ["bash", root.fetchScript, root.stateDir, "prefetch"]
+      prefetchProc.running = true
     }
+  }
+
+  Process {
+    id: prefetchProc
   }
 
   Process {

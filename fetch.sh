@@ -61,25 +61,33 @@ read_config() {
 # 304 Not Modified or on any curl failure (offline resilience).
 fetch_url() {
   local url="$1" tag="$2"
-  local key raw etag code
+  local key raw etag code modified
   key="$(sha1 "$url")"
   raw="$STATE/cache/$tag-$key.body"
   etag="$STATE/etags/$tag-$key.etag"
+  local -a conditional=(--etag-save "$etag")
+  [ -s "$etag" ] && conditional+=(--etag-compare "$etag")
+  if [ ! -s "$etag" ] && [ -s "$raw" ]; then
+    modified=$(date -Ru -r "$raw" 2>/dev/null || true)
+    [ -n "$modified" ] && conditional+=(--time-cond "$modified")
+  fi
   code=$(curl -sS --max-time 25 --max-filesize "$MAX_BYTES" \
-    -A "$UA" --compressed \
-    ${etag:+--etag-compare "$etag"} --etag-save "$etag" \
+    -A "$UA" --compressed "${conditional[@]}" \
     -o "$raw.new" -w '%{http_code}' "$url" 2>>"$STATE/fetch.log") || code="000"
   case "$code" in
     200)
       [ -s "$raw.new" ] && mv -f "$raw.new" "$raw" || rm -f "$raw.new"
+      printf '200\n' >"$STATE/.fetch-code-$key"
       printf '%s' "$raw"
       ;;
     304)
       rm -f "$raw.new"
+      printf '304\n' >"$STATE/.fetch-code-$key"
       [ -f "$raw" ] && printf '%s' "$raw"
       ;;
     *)
       rm -f "$raw.new"
+      printf '%s\n' "$code" >"$STATE/.fetch-code-$key"
       # Offline or server error: fall back to the last good body, if any.
       [ -f "$raw" ] && printf '%s' "$raw"
       ;;
@@ -149,6 +157,10 @@ parse_rss() { # rawfile feedname maxitems outfile
       [ -z "$title" ] && { i=$((i + 1)); continue; }
       [ -z "$link" ] && link="$guid"
       epoch=$(to_epoch "$pub")
+      # RSS excerpts often contain markup; avoid an HTML parser for plain text.
+      if [[ "$desc" == *'<'* ]]; then
+        desc=$(printf '%s' "$desc" | xmllint --html --recover --xpath 'string(//body)' - 2>/dev/null | head -c 280)
+      fi
       # hackernewsrss-style digests embed score + thread link in the excerpt.
       score=$(printf '%s' "$desc" | grep -o '[0-9]\+ points' | head -1 | grep -o '[0-9]\+' || true)
       hnid=$(printf '%s' "$desc" | grep -o 'item?id=[0-9]\+' | head -1 | cut -d= -f2 || true)
@@ -259,10 +271,9 @@ fetch_source() { # line index : fetch+parse ONE source into .src.N.json ; exit 1
 
 do_poll() {
   read_config
-  local feeds="$STATE/feeds.txt" errors=0 parts=() n=0 line
+  local feeds="$STATE/feeds.txt" errors=0 parts=() source_lines=() n=0 line
   [ -f "$feeds" ] || { printf '[]' | atomic_write "$STATE/items.json"; return 0; }
-  # Phase 1: fetch+parse every source with at most 8 in flight. One network
-  # round per source instead of one round per item (HN) or per feed (RSS).
+  # Phase 1: fetch+parse every source with at most 8 in flight.
   local running=0
   declare -A seen_source=()
   while IFS= read -r line || [ -n "$line" ]; do
@@ -275,6 +286,7 @@ do_poll() {
     running=$((running + 1))
     if [ "$running" -ge 8 ]; then wait -n; running=$((running - 1)); fi
     parts+=("$STATE/.src.$n.json")
+    source_lines+=("$line")
   done <"$feeds"
   wait
   # Phase 2: merge. Sources that failed keep no file; count them as errors.
@@ -283,11 +295,28 @@ do_poll() {
     if [ -s "$f" ]; then merged+=("$f"); else printf '[]' >"$f"; errors=$((errors + 1)); fi
   done
   if [ "$n" -eq 0 ]; then printf '[]' | atomic_write "$STATE/items.json"; else
+    local changed=0
+    for ((source_no=0; source_no<${#parts[@]}; source_no++)); do
+      f="${parts[$source_no]}"
+      if [ -f "$f" ]; then
+        local key source_line
+        source_line="${source_lines[$source_no]}"
+        case "$source_line" in
+          hn:*) changed=1 ;;
+          *) key=$(sha1 "$source_line"); [ "$(cat "$STATE/.fetch-code-$key" 2>/dev/null)" != 304 ] && changed=1 ;;
+        esac
+      fi
+    done
+    if [ "$changed" -eq 0 ] && [ -s "$STATE/items.json" ]; then
+      : # Every RSS source was unchanged; keep the existing merged list.
+    else
     jq -s '[.[].[]] | unique_by(.id) | sort_by(.published) | reverse | .[0:500]' \
       "${merged[@]}" 2>/dev/null | atomic_write "$STATE/items.json" \
       || printf '[]' | atomic_write "$STATE/items.json"
+    fi
   fi
   rm -f "$STATE"/.src.*.json
+  rm -f "$STATE"/.fetch-code-*
   jq -n --argjson updated "$(now_epoch)" --argjson errors "$errors" \
     --argjson count "$(jq 'length' "$STATE/items.json" 2>/dev/null || echo 0)" \
     '{updatedAt:$updated, ok: ($errors == 0), errors:$errors, count:$count}' \
@@ -424,6 +453,23 @@ do_digest() {
   printf '%s\n' "$digest"
 }
 
+# Warm a tiny cache for the first few unread stories without delaying polling.
+# This runs as a separate service process and is intentionally capped at 3.
+do_prefetch() {
+  local id url
+  [ -s "$STATE/items.json" ] || return 0
+  while IFS=$'\t' read -r id url; do
+    [ -n "$url" ] || continue
+    if [[ "$id" == hn* ]]; then
+      do_comments "${id#hn}"
+    fi
+    do_article "$url" >/dev/null 2>&1 || true
+  done < <(jq -r --slurpfile r "$STATE/read.json" '
+    (($r[0].ids // []) | map({(.):true}) | add // {}) as $seen
+    | map(select($seen[.id] != true)) | .[0:3][] | [.id, .link] | @tsv
+  ' "$STATE/items.json" 2>/dev/null)
+}
+
 # ------------------------------------------------------------ write-config ---
 
 do_write_config() { # JSON
@@ -459,6 +505,7 @@ do_mark_all_read() {
 
 case "$MODE" in
   poll) do_poll ;;
+  prefetch) do_prefetch ;;
   comments) do_comments "${3:?comments needs HNID}" ;;
   article) do_article "${3:?article needs URL}" ;;
   digest) do_digest ;;
