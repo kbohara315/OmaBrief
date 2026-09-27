@@ -138,16 +138,28 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.headline
-    labelVisible: !root.vertical
-    hasVisualContent: text !== ""
+    text: ""
+    labelVisible: false
+    hasVisualContent: true
     horizontalMargin: 8.75
     verticalPadding: 8.75
+    tooltipText: (root.unreadCount > 0 ? root.unreadCount + " unread · " : "") + root.headline
 
     onPressed: function(b) {
       if (b === Qt.MiddleButton) root.serviceRefresh()
       else if (b === Qt.RightButton) root.openReader(null)
       else root.togglePanel()
+    }
+
+    // Icon-only pill: the headline lives in the tooltip so long titles can
+    // never push neighboring widgets aside (or overlap them).
+    Text {
+      textFormat: Text.PlainText
+      anchors.centerIn: parent
+      text: "󰈙"
+      color: button.foreground
+      font.family: button.fontFamily
+      font.pixelSize: button.fontSize
     }
   }
 

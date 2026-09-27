@@ -10,6 +10,9 @@ Built on the zero-build stack: all network and XML work runs in `fetch.sh`
 process. QML only reads the JSON cache, so raw payloads never touch shell
 memory. No daemons, no build step, no accounts.
 
+The bar shows a single icon — headlines live in the hover tooltip, so long
+titles never push other widgets aside.
+
 ## Install
 
 ```bash
@@ -30,7 +33,8 @@ Requires only what Omarchy already ships: `curl`, `jq`, `xmllint`
 
 | Input | Action |
 |---|---|
-| Click pill | Open / close the story popup |
+| `SUPER + ALT + H` | Toggle the stories popup from anywhere |
+| Click icon | Open / close the story popup |
 | Middle-click pill | Refresh now |
 | Right-click pill | Fullscreen reader for the top story |
 | `j` / `k`, `↑` / `↓` | Move selection |
@@ -41,6 +45,16 @@ Requires only what Omarchy already ships: `curl`, `jq`, `xmllint`
 | `a` | Mark all read |
 | `u` | Toggle unread-only |
 | `o` / `t` / `a` / `s` / `Esc` (reader) | Open original, thread view, article view, AI summary, close |
+
+### Global shortcut
+
+The service registers `herald:herald-toggle` via Hyprland's global-shortcuts
+protocol (visible in `hyprctl globalshortcuts`). Bind it in
+`~/.config/hypr/bindings.lua`:
+
+```lua
+hl.bind("SUPER + ALT + H", hl.dsp.global("herald:herald-toggle"), { description = "Herald stories" })
+```
 
 Default sources: `hn:top:30` plus `https://hackernewsrss.com/feed.xml`.
 Change them in the widget settings (one source per line — an RSS/Atom/JSON

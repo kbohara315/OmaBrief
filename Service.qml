@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 import "Model.js" as Model
 
@@ -271,9 +272,21 @@ Item {
     }
   }
 
+  // Global shortcut (singleton here, not in the per-monitor widget, so the
+  // appid:name pair registers exactly once). Bind it in hyprland.conf:
+  //   bind = SUPER ALT, H, global, herald:herald-toggle
+  GlobalShortcut {
+    appid: "herald"
+    name: "herald-toggle"
+    description: "Toggle Herald stories panel"
+    onPressed: {
+      if (root.shell && typeof root.shell.toggle === "function")
+        root.shell.toggle("kshitij.herald", "{}")
+    }
+  }
+
   IpcHandler {
     target: "kshitij.herald"
-
     function refresh(): string {
       root.refresh()
       return "ok"
