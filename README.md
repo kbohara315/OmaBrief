@@ -16,7 +16,7 @@ titles never push other widgets aside.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/omabrief.git --enable
+omarchy plugin add https://github.com/kbohara315/OmaBrief.git --enable
 ```
 
 The widget lands in the right section of the bar. Move it any time:
