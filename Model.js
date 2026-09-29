@@ -1,4 +1,4 @@
-// Herald Model.js — pure logic, no Qt or Quickshell imports, so it stays
+// OmaBrief Model.js — pure logic, no Qt or Quickshell imports, so it stays
 // unit-testable under plain node. QML files import it as `import "Model.js" as Model`.
 
 function clampInt(value, fallback, min, max) {

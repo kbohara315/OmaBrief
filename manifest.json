@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "kshitij.herald",
-  "name": "Herald",
+  "id": "kshitij.omabrief",
+  "name": "OmaBrief",
   "version": "0.1.0",
   "author": "Kshitij Bohara",
   "description": "Fast keyboard-first RSS and Hacker News reader with a daily digest",
@@ -15,7 +15,7 @@
   },
   "keepLoaded": true,
   "barWidget": {
-    "displayName": "Herald",
+    "displayName": "OmaBrief",
     "description": "Headlines from your feeds and Hacker News",
     "category": "Info",
     "allowMultiple": false,

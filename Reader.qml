@@ -7,14 +7,14 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Herald fullscreen reader: extracted article text beside the HN comment
+// OmaBrief fullscreen reader: extracted article text beside the HN comment
 // thread, with an opt-in AI summary. Opened from the popup or by
 // right-clicking the bar pill. Fetches run through the service; this surface
 // only watches the cache files the service publishes.
 Item {
   id: root
 
-  property var herald: null
+  property var omabrief: null
   property var bar: null
   property bool opened: false
   property var current: null
@@ -57,16 +57,16 @@ Item {
       return []
     }
   }
-  readonly property string summaryText: herald ? String(herald.summary || "") : ""
-  readonly property bool aiAvailable: herald ? herald.aiEnabled : false
+  readonly property string summaryText: brief ? String(brief.summary || "") : ""
+  readonly property bool aiAvailable: brief ? brief.aiEnabled : false
 
   function openWith(item) {
     root.current = item
     root.mode = "article"
     root.opened = true
-    if (item && root.herald) {
-      root.herald.fetchArticle(item.link)
-      if (item.hnId) root.herald.fetchThread(item.hnId)
+    if (item && root.brief) {
+      root.brief.fetchArticle(item.link)
+      if (item.hnId) root.brief.fetchThread(item.hnId)
     }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -77,31 +77,31 @@ Item {
   }
 
   function openOriginal() {
-    if (root.current && root.herald) {
-      root.herald.markRead(root.current.id)
-      root.herald.openLink(root.current.link)
+    if (root.current && root.brief) {
+      root.brief.markRead(root.current.id)
+      root.brief.openLink(root.current.link)
     }
   }
 
   function openThreadUrl() {
-    if (root.current && root.current.commentsUrl && root.herald)
-      root.herald.openLink(root.current.commentsUrl)
+    if (root.current && root.current.commentsUrl && root.brief)
+      root.brief.openLink(root.current.commentsUrl)
   }
 
   function requestSummary() {
-    if (!root.herald || !root.aiAvailable || !root.herald.articlePath) return
-    root.herald.summarize(root.herald.articlePath)
+    if (!root.brief || !root.aiAvailable || !root.brief.articlePath) return
+    root.brief.summarize(root.brief.articlePath)
   }
 
   property FileView articleFile: FileView {
-    path: root.herald ? String(root.herald.articlePath || "") : ""
+    path: root.brief ? String(root.brief.articlePath || "") : ""
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
   }
 
   property FileView threadFile: FileView {
-    path: root.herald ? String(root.herald.threadPath || "") : ""
+    path: root.brief ? String(root.brief.threadPath || "") : ""
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
@@ -112,7 +112,7 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "herald-reader"
+    WlrLayershell.namespace: "omabrief-reader"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
@@ -227,7 +227,7 @@ Item {
               textFormat: Text.PlainText
               width: parent.width
               wrapMode: Text.Wrap
-              text: root.current ? String(root.current.title || "") : "Herald reader"
+              text: root.current ? String(root.current.title || "") : "OmaBrief reader"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title

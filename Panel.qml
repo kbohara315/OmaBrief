@@ -5,18 +5,18 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Herald story popup: search, feed chips, keyboard-driven story list.
+// OmaBrief story popup: search, feed chips, keyboard-driven story list.
 // BarWidget.qml owns the bar pill and hands this panel the button to anchor
 // against. All data comes from the service; this panel never fetches.
 Panel {
   id: root
-  moduleName: "kshitij.herald"
-  ipcTarget: "kshitij.herald"
+  moduleName: "kshitij.omabrief"
+  ipcTarget: "kshitij.omabrief"
   manageIpc: false
 
   property var anchorItem: null
   property var hostWidget: null
-  property var herald: null
+  property var omabrief: null
   readonly property var barIdentity: hostWidget || root
 
   property string query: ""
@@ -26,8 +26,8 @@ Panel {
   property string addError: ""
   // True between submit and the service reporting back (feedOpSeq bump).
   property bool addPending: false
-  readonly property string opNotice: herald ? String(herald.feedNotice || "") : ""
-  readonly property int opSeq: herald ? (herald.feedOpSeq || 0) : 0
+  readonly property string opNotice: brief ? String(brief.feedNotice || "") : ""
+  readonly property int opSeq: brief ? (brief.feedOpSeq || 0) : 0
   onOpSeqChanged: {
     if (root.addPending) {
       root.addPending = false
@@ -39,15 +39,15 @@ Panel {
     }
   }
 
-  readonly property var allItems: herald ? herald.items : []
-  readonly property var readMap: herald ? herald.readIds : ({})
-  readonly property bool useScores: herald ? herald.showScores : true
+  readonly property var allItems: brief ? brief.items : []
+  readonly property var readMap: brief ? brief.readIds : ({})
+  readonly property bool useScores: brief ? brief.showScores : true
   readonly property var visibleItems: Model.filterItems(allItems, root.query, root.feedFilter, root.hideRead, root.readMap)
   readonly property var feeds: Model.feedNames(allItems)
   readonly property var panelFeedKeys: {
-    if (!herald || !herald.panelFeedsText) return ({})
+    if (!brief || !brief.panelFeedsText) return ({})
     var keys = {}
-    var lines = Model.parseFeeds(herald.panelFeedsText, "")
+    var lines = Model.parseFeeds(brief.panelFeedsText, "")
     for (var i = 0; i < lines.length; i++) {
       var k = Model.feedKey(lines[i])
       if (k) keys[k] = true
@@ -55,17 +55,17 @@ Panel {
     return keys
   }
   readonly property var failedFeeds: {
-    if (!herald || !herald.feedHealth) return []
+    if (!brief || !brief.feedHealth) return []
     var out = []
-    for (var i = 0; i < herald.feedHealth.length; i++) {
-      if (herald.feedHealth[i] && herald.feedHealth[i].ok === false) out.push(herald.feedHealth[i].feed)
+    for (var i = 0; i < brief.feedHealth.length; i++) {
+      if (brief.feedHealth[i] && brief.feedHealth[i].ok === false) out.push(brief.feedHealth[i].feed)
     }
     return out
   }
-  readonly property int unreadTotal: herald ? herald.unread : 0
+  readonly property int unreadTotal: brief ? brief.unread : 0
   readonly property string updatedLabel: {
-    if (!herald || !herald.updatedAt) return "never updated"
-    return "updated " + Model.relativeTime(herald.updatedAt)
+    if (!brief || !brief.updatedAt) return "never updated"
+    return "updated " + Model.relativeTime(brief.updatedAt)
   }
 
   readonly property color contentForeground: bar ? bar.foreground : Color.foreground
@@ -99,9 +99,9 @@ Panel {
   function openCurrent() {
     var item = currentItem()
     if (!item) return
-    if (herald) {
-      herald.markRead(item.id)
-      herald.openLink(item.link)
+    if (brief) {
+      brief.markRead(item.id)
+      brief.openLink(item.link)
     }
     root.close()
   }
@@ -109,15 +109,15 @@ Panel {
   function openThread(item) {
     var target = item || currentItem()
     if (!target) return
-    if (herald) herald.markRead(target.id)
+    if (brief) brief.markRead(target.id)
     if (root.hostWidget && typeof root.hostWidget.openReader === "function")
       root.hostWidget.openReader(target)
   }
 
   // Source line in feeds.txt backing a displayed feed label (for remove).
   function feedSourceFor(label) {
-    if (!herald || !herald.feedsText) return ""
-    var lines = Model.parseFeeds(herald.feedsText, "")
+    if (!brief || !brief.feedsText) return ""
+    var lines = Model.parseFeeds(brief.feedsText, "")
     for (var i = 0; i < lines.length; i++) {
       if (Model.feedLabel(lines[i]) === label) return lines[i]
     }
@@ -144,12 +144,12 @@ Panel {
       return
     }
     var line = label !== "" ? label + " | " + url : url
-    if (!herald || typeof herald.addFeed !== "function") {
+    if (!brief || typeof brief.addFeed !== "function") {
       root.addError = "Service not ready — try again in a moment."
       return
     }
     root.addPending = true
-    herald.addFeed(line)
+    brief.addFeed(line)
   }
 
   function moveSelection(delta) {
@@ -190,8 +190,8 @@ Panel {
         if (t === "/") root.focusSearch()
         else if (t === "j") root.moveSelection(1)
         else if (t === "k") root.moveSelection(-1)
-        else if (t === "r" || t === "R") { if (root.herald) root.herald.refresh() }
-        else if (t === "a" || t === "A") { if (root.herald) root.herald.markAllRead() }
+        else if (t === "r" || t === "R") { if (root.brief) root.brief.refresh() }
+        else if (t === "a" || t === "A") { if (root.brief) root.brief.markAllRead() }
         else if (t === "c" || t === "C") root.openThread(null)
         else if (t === "u" || t === "U") root.hideRead = !root.hideRead
       }
@@ -209,7 +209,7 @@ Panel {
           Text {
             textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
-            text: "Herald"
+            text: "OmaBrief"
             color: root.contentForeground
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.title
@@ -233,7 +233,7 @@ Panel {
             tooltipText: "Refresh now (r)"
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
-            onClicked: { if (root.herald) root.herald.refresh() }
+            onClicked: { if (root.brief) root.brief.refresh() }
           }
 
           PanelActionButton {
@@ -242,7 +242,7 @@ Panel {
             tooltipText: "Mark all read (a)"
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
-            onClicked: { if (root.herald) root.herald.markAllRead() }
+            onClicked: { if (root.brief) root.brief.markAllRead() }
           }
 
           PanelActionButton {
@@ -341,9 +341,9 @@ Panel {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                       var src = root.feedSourceFor(modelData)
-                      if (src && root.herald) {
+                      if (src && root.brief) {
                         if (root.feedFilter === modelData) root.feedFilter = ""
-                        root.herald.removeFeed(src)
+                        root.brief.removeFeed(src)
                       }
                     }
                   }
@@ -535,7 +535,7 @@ Panel {
           Text {
             textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
-            text: root.updatedLabel + (root.herald && root.herald.refreshing ? " · fetching…" : "")
+            text: root.updatedLabel + (root.brief && root.brief.refreshing ? " · fetching…" : "")
               + (root.failedFeeds.length > 0 ? " · " + root.failedFeeds.length + " feed failed" + (root.failedFeeds.length > 1 ? "s" : "") : "")
             color: Qt.darker(root.contentForeground, 1.6)
             font.family: root.contentFontFamily

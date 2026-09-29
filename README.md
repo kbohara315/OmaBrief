@@ -1,4 +1,4 @@
-# Herald
+# OmaBrief
 
 Fast, keyboard-first RSS and Hacker News reader for Omarchy Quattro, with a
 daily morning briefing. Bar pill with a rotating headline, a popup story list,
@@ -16,13 +16,13 @@ titles never push other widgets aside.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/herald.git --enable
+omarchy plugin add https://github.com/<you>/omabrief.git --enable
 ```
 
 The widget lands in the right section of the bar. Move it any time:
 
 ```bash
-omarchy bar move kshitij.herald --section right
+omarchy bar move kshitij.omabrief --section right
 ```
 
 Requires only what Omarchy already ships: `curl`, `jq`, `xmllint`
@@ -48,12 +48,12 @@ Requires only what Omarchy already ships: `curl`, `jq`, `xmllint`
 
 ### Global shortcut
 
-The service registers `herald:herald-toggle` via Hyprland's global-shortcuts
+The service registers `omabrief:omabrief-toggle` via Hyprland's global-shortcuts
 protocol (visible in `hyprctl globalshortcuts`). Bind it in
 `~/.config/hypr/bindings.lua`:
 
 ```lua
-hl.bind("SUPER + ALT + H", hl.dsp.global("herald:herald-toggle"), { description = "Herald stories" })
+hl.bind("SUPER + ALT + H", hl.dsp.global("omabrief:omabrief-toggle"), { description = "OmaBrief stories" })
 ```
 
 Default sources: `hn:top:30` plus `https://hackernewsrss.com/feed.xml`.
@@ -78,7 +78,7 @@ discussion.
 
 The service polls in the background even while the panel is closed, keeps an
 offline cache, and posts a morning briefing notification at Digest time
-(`~/.local/state/omarchy/herald/digest.md` keeps the markdown).
+(`~/.local/state/omarchy/omabrief/digest.md` keeps the markdown).
 
 Reader keys: `a` article text, `t` HN thread, `o`/`Enter` open in the
 browser, `s` AI summary, `+`/`-` bigger/smaller reading text, `0` reset text
@@ -89,15 +89,15 @@ the `press o` fallback instead of raw JavaScript.
 ### Command line
 
 ```bash
-omarchy-shell kshitij.herald ping
-omarchy-shell kshitij.herald status
-omarchy-shell kshitij.herald refresh
-omarchy-shell kshitij.herald digest
-omarchy-shell kshitij.herald open 0      # open the Nth story
-omarchy-shell kshitij.herald add "https://lobste.rs/rss"
-omarchy-shell kshitij.herald remove "https://lobste.rs/rss"   # settings-listed feeds return on the next settings sync; delete them in widget settings
-omarchy-shell kshitij.herald feeds       # list configured sources
-omarchy-shell shell summon kshitij.herald '"{}"'
+omarchy-shell kshitij.omabrief ping
+omarchy-shell kshitij.omabrief status
+omarchy-shell kshitij.omabrief refresh
+omarchy-shell kshitij.omabrief digest
+omarchy-shell kshitij.omabrief open 0      # open the Nth story
+omarchy-shell kshitij.omabrief add "https://lobste.rs/rss"
+omarchy-shell kshitij.omabrief remove "https://lobste.rs/rss"   # settings-listed feeds return on the next settings sync; delete them in widget settings
+omarchy-shell kshitij.omabrief feeds       # list configured sources
+omarchy-shell shell summon kshitij.omabrief '"{}"'
 ```
 
 ## Files
@@ -113,7 +113,7 @@ fetch.sh        fetch + parse + cache + digest helper (curl/xmllint/jq)
 test/           node tests for Model.js
 ```
 
-State lives under `~/.local/state/omarchy/herald/` (`items.json`,
+State lives under `~/.local/state/omarchy/omabrief/` (`items.json`,
 `read.json`, `config.json`, `feeds.txt`, `panel-feeds.txt` for popup-added
 feeds, `digest.md`, per-feed ETag cache, per-feed health in `status.json`).
 Remote content is parsed, never executed; article text is rendered as
@@ -123,13 +123,13 @@ cached article text to your own command on stdin.
 ## Update and remove
 
 ```bash
-omarchy plugin update kshitij.herald
+omarchy plugin update kshitij.omabrief
 omarchy-restart-shell
 ```
 
 ```bash
-omarchy plugin remove kshitij.herald
-rm -rf ~/.local/state/omarchy/herald   # optional: erase cache + read state
+omarchy plugin remove kshitij.omabrief
+rm -rf ~/.local/state/omarchy/omabrief   # optional: erase cache + read state
 ```
 
 ## Development
@@ -141,7 +141,7 @@ omarchy plugin validate .
 /usr/lib/qt6/bin/qmllint -I /usr/share/omarchy/shell Service.qml BarWidget.qml Panel.qml Reader.qml
 ```
 
-Edit the checkout at `~/.config/omarchy/plugins/kshitij.herald/` — the shell
+Edit the checkout at `~/.config/omarchy/plugins/kshitij.omabrief/` — the shell
 hot-reloads on save (`keepLoaded` services need `omarchy-restart-shell`).
 
 MIT licensed.

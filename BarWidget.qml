@@ -5,36 +5,36 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Herald bar pill: rotating headline ticker with an unread dot.
+// OmaBrief bar pill: rotating headline ticker with an unread dot.
 // Click toggles the story popup; middle-click refreshes; right-click opens
 // the fullscreen reader. Owns the popup + reader loaders and syncs widget
 // settings down to the service's config file.
 BarWidget {
   id: root
-  moduleName: "kshitij.herald"
+  moduleName: "kshitij.omabrief"
 
   // Own service singleton via the bar's scoped shell facade. Null until the
   // service loads (or under a replacement bar, which gets no services).
-  readonly property var herald: (bar && bar.shell && typeof bar.shell.serviceFor === "function")
-    ? bar.shell.serviceFor("kshitij.herald") : null
+  readonly property var omabrief: (bar && bar.shell && typeof bar.shell.serviceFor === "function")
+    ? bar.shell.serviceFor("kshitij.omabrief") : null
 
-  readonly property var feedItems: herald ? herald.items : []
-  readonly property var readMap: herald ? herald.readIds : ({})
-  readonly property int unreadCount: herald ? herald.unread : 0
-  readonly property bool isRefreshing: herald ? herald.refreshing : false
-  readonly property bool useScores: herald ? herald.showScores : (setting("showScores", true) !== false)
+  readonly property var feedItems: brief ? brief.items : []
+  readonly property var readMap: brief ? brief.readIds : ({})
+  readonly property int unreadCount: brief ? brief.unread : 0
+  readonly property bool isRefreshing: brief ? brief.refreshing : false
+  readonly property bool useScores: brief ? brief.showScores : (setting("showScores", true) !== false)
 
   readonly property int tickerSeconds: Model.clampInt(setting("tickerSeconds", 6), 6, 0, 120)
   property int tickerIndex: 0
 
   readonly property string headline: {
-    if (feedItems.length === 0) return herald && herald.refreshing ? "Herald fetching…" : "Herald"
+    if (feedItems.length === 0) return brief && brief.refreshing ? "OmaBrief fetching…" : "OmaBrief"
     var item = feedItems[tickerIndex % feedItems.length]
-    return item ? String(item.title || "Herald") : "Herald"
+    return item ? String(item.title || "OmaBrief") : "OmaBrief"
   }
 
   function serviceRefresh() {
-    if (herald && typeof herald.refresh === "function") herald.refresh()
+    if (brief && typeof brief.refresh === "function") brief.refresh()
   }
 
   // ---- Shape contract for shell.summon/hide/toggle routing.
@@ -63,24 +63,24 @@ BarWidget {
     if ("settings" in target) target.settings = root.settings
     if ("anchorItem" in target) target.anchorItem = button
     if ("hostWidget" in target) target.hostWidget = root
-    if ("herald" in target) target.herald = root.herald
+    if ("brief" in target) target.brief = root.brief
   }
 
   function injectReader() {
     var target = readerLoader.item
     if (!target) return
-    if ("herald" in target) target.herald = root.herald
+    if ("brief" in target) target.brief = root.brief
     if ("bar" in target) target.bar = root.bar
   }
 
   // Push shell.json settings down to the service config + feeds file.
-  // Union-merges feeds added from the popup UI (herald.feedsText) so a
+  // Union-merges feeds added from the popup UI (brief.feedsText) so a
   // settings sync never clobbers them; removals of settings-listed feeds
   // must be done in Bar settings.
   function syncConfig() {
-    if (!root.herald) return
+    if (!root.brief) return
     var feeds = Model.parseFeeds(setting("feeds", "hn:top:30\nhttps://hackernewsrss.com/feed.xml"))
-    if (root.herald.feedsText) feeds = Model.mergeFeeds(feeds, Model.parseFeeds(root.herald.feedsText, ""))
+    if (root.brief.feedsText) feeds = Model.mergeFeeds(feeds, Model.parseFeeds(root.brief.feedsText, ""))
     var config = {
       refreshMinutes: Model.clampInt(setting("refreshMinutes", 15), 15, 2, 1440),
       storyCount: Model.clampInt(setting("storyCount", 30), 30, 1, 100),
@@ -91,7 +91,7 @@ BarWidget {
       showScores: setting("showScores", true) !== false,
       feeds: feeds
     }
-    configProc.command = ["bash", root.herald.fetchScript, root.herald.stateDir,
+    configProc.command = ["bash", root.brief.fetchScript, root.brief.stateDir,
       "write-config", JSON.stringify(config)]
     configProc.running = true
   }
@@ -101,7 +101,7 @@ BarWidget {
 
   onBarChanged: injectPanel()
   onSettingsChanged: { injectPanel(); syncConfig() }
-  onHeraldChanged: { injectPanel(); injectReader(); syncConfig() }
+  onBriefChanged: { injectPanel(); injectReader(); syncConfig() }
 
   Component.onCompleted: Qt.callLater(syncConfig)
 

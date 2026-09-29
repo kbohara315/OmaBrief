@@ -4,7 +4,7 @@ import Quickshell.Hyprland
 import Quickshell.Io
 import "Model.js" as Model
 
-// Herald background service. Owns every byte of feed state: it polls
+// OmaBrief background service. Owns every byte of feed state: it polls
 // fetch.sh on an interval, exposes the parsed item list and read-state to
 // the bar widget, and fires the daily digest. The widget never fetches.
 Item {
@@ -13,10 +13,10 @@ Item {
   property var shell: null
   property var manifest: null
 
-  readonly property string pluginId: "kshitij.herald"
+  readonly property string pluginId: "kshitij.omabrief"
   readonly property string home: Quickshell.env("HOME")
-  readonly property string stateDir: home + "/.local/state/omarchy/herald"
-  readonly property string pluginDir: home + "/.config/omarchy/plugins/kshitij.herald"
+  readonly property string stateDir: home + "/.local/state/omarchy/omabrief"
+  readonly property string pluginDir: home + "/.config/omarchy/plugins/kshitij.omabrief"
   readonly property string fetchScript: pluginDir + "/fetch.sh"
 
   // ---- Cached state, fed by FileViews below. The shell holds only parsed
@@ -330,22 +330,22 @@ Item {
     id: aiProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: heraldAi.summaryReady(String(text || ""))
+      onStreamFinished: briefAi.summaryReady(String(text || ""))
     }
   }
 
   // Fan-out target for the AI summary: set by the reader when it opens.
   QtObject {
-    id: heraldAi
+    id: briefAi
     signal summaryReady(string text)
   }
-  property alias ai: heraldAi
+  property alias ai: briefAi
 
   function onSummaryReady(text) {
     root.summary = text
   }
 
-  Component.onCompleted: heraldAi.summaryReady.connect(onSummaryReady)
+  Component.onCompleted: briefAi.summaryReady.connect(onSummaryReady)
 
   Timer {
     id: pollTimer
@@ -383,19 +383,19 @@ Item {
 
   // Global shortcut (singleton here, not in the per-monitor widget, so the
   // appid:name pair registers exactly once). Bind it in hyprland.conf:
-  //   bind = SUPER ALT, H, global, herald:herald-toggle
+  //   bind = SUPER ALT, H, global, omabrief:omabrief-toggle
   GlobalShortcut {
-    appid: "herald"
-    name: "herald-toggle"
-    description: "Toggle Herald stories panel"
+    appid: "omabrief"
+    name: "omabrief-toggle"
+    description: "Toggle OmaBrief stories panel"
     onPressed: {
       if (root.shell && typeof root.shell.toggle === "function")
-        root.shell.toggle("kshitij.herald", "{}")
+        root.shell.toggle("kshitij.omabrief", "{}")
     }
   }
 
   IpcHandler {
-    target: "kshitij.herald"
+    target: "kshitij.omabrief"
     function refresh(): string {
       root.refresh()
       return "ok"

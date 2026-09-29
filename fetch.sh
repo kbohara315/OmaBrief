@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Herald fetch helper: all network and XML work happens here, outside the
+# OmaBrief fetch helper: all network and XML work happens here, outside the
 # long-running shell process. QML only ever reads the JSON cache this script
 # writes, so raw payloads and parsing never touch shell memory.
 #
@@ -17,7 +17,7 @@ STATE="${1:?usage: fetch.sh STATE_DIR <poll|comments|article|digest|write-config
 MODE="${2:?usage: fetch.sh STATE_DIR <poll|comments|article|digest|write-config> ...}"
 
 HN_API="https://hacker-news.firebaseio.com/v0"
-UA="herald-omarchy-plugin/0.1.0"
+UA="omabrief-omarchy-plugin/0.1.0"
 # Article pages fetch with browser-like headers — a plain curl UA/headers
 # trips naive bot checks and gets challenge pages instead of content. Feeds
 # keep the honest UA above; only page extraction disguises itself.
@@ -613,13 +613,13 @@ do_digest() {
     | map(select($seen[.id] != true)) | sort_by(.score // 0) | reverse | .[0:8]' \
     "$items" 2>/dev/null) || top="[]"
   {
-    printf '# Herald briefing — %s\n\n' "$(date '+%A, %B %d')"
+    printf '# OmaBrief briefing — %s\n\n' "$(date '+%A, %B %d')"
     printf '%s' "$top" | jq -r '.[] | "- [\(.title)](\(.link))" + (if .score then " — \(.score) pts" else "" end) + (if .commentsUrl then " ([thread](\(.commentsUrl)))" else "" end)'
-    printf '\n_Generated locally by Herald._\n'
+    printf '\n_Generated locally by OmaBrief._\n'
   } | atomic_write "$digest"
   summary=$(printf '%s' "$top" | jq -r '.[0:5] | map(.title) | join("\n• ")' 2>/dev/null)
   if [ -n "$summary" ] && command -v notify-send >/dev/null 2>&1; then
-    notify-send "Herald — morning briefing" "• $summary" 2>/dev/null || true
+    notify-send "OmaBrief — morning briefing" "• $summary" 2>/dev/null || true
   fi
   date '+%Y-%-m-%-d' >"$STATE/digest-day.txt"
   printf '%s\n' "$digest"
