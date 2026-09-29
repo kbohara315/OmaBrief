@@ -141,7 +141,12 @@ omarchy plugin validate .
 /usr/lib/qt6/bin/qmllint -I /usr/share/omarchy/shell Service.qml BarWidget.qml Panel.qml Reader.qml
 ```
 
-Edit the checkout at `~/.config/omarchy/plugins/kshitij.omabrief/` — the shell
-hot-reloads on save (`keepLoaded` services need `omarchy-restart-shell`).
+Edit the checkout at `~/personal/code/hobby/omarchy-plugins/OmaBrief/`,
+then sync to the live dir the shell loads and restart:
+
+```bash
+cp -f BarWidget.qml fetch.sh LICENSE manifest.json Model.js Panel.qml Reader.qml README.md Service.qml ~/.config/omarchy/plugins/kshitij.omabrief/
+omarchy-restart-shell
+```
 
 MIT licensed.
