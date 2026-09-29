@@ -24,7 +24,85 @@ function isHnSource(line) {
   return String(line).indexOf("hn:") === 0
 }
 
+// Structured feed spec. Supported line formats (one per line):
+//   hn:top:30
+//   https://example.com/feed.xml
+//   Label | https://example.com/feed.xml
+//   https://example.com/feed.xml | max:20
+//   Label | https://example.com/feed.xml | max:20
+//   Label | hn:top:20
+// A leading "!" disables the line without deleting it.
+function parseFeedSpec(line) {
+  var raw = String(line === undefined || line === null ? "" : line)
+  var text = raw.replace(/^\s+|\s+$/g, "")
+  if (text === "" || text.charAt(0) === "#") return null
+  var disabled = false
+  if (text.charAt(0) === "!") {
+    disabled = true
+    text = text.slice(1).replace(/^\s+|\s+$/g, "")
+    if (text === "") return null
+  }
+  var parts = text.split("|")
+  for (var i = 0; i < parts.length; i++) parts[i] = parts[i].replace(/^\s+|\s+$/g, "")
+  var spec = { raw: raw, disabled: disabled, kind: "rss", url: "", label: "", max: 0, count: 0 }
+  for (var j = 0; j < parts.length; j++) {
+    var p = parts[j]
+    if (/^max\s*:\s*\d+\s*$/i.test(p)) {
+      spec.max = parseInt(p.split(":")[1], 10)
+    } else if (/^hn\s*:/i.test(p)) {
+      var segs = p.split(":")
+      var kind = (segs[1] || "top").replace(/\s+/g, "").toLowerCase()
+      if (["top", "best", "new", "ask", "show", "job", "jobs"].indexOf(kind) === -1) kind = "top"
+      if (kind === "jobs") kind = "job"
+      var count = parseInt(segs[2], 10)
+      spec.kind = "hn"
+      spec.url = "hn:" + kind + (isNaN(count) ? "" : ":" + count)
+      spec.count = isNaN(count) ? 0 : count
+      if (!spec.label) spec.label = "HN " + kind
+    } else if (/^https?:\/\//i.test(p)) {
+      spec.kind = "rss"
+      spec.url = p
+    } else if (p !== "") {
+      spec.label = p
+    }
+  }
+  if (spec.url === "") return null
+  return spec
+}
+
+// Canonical key for dedupe: hn spec as-is (lowercased kind), URLs trimmed
+// with trailing slashes stripped and host lowercased.
+function feedKey(specOrLine) {
+  var spec = typeof specOrLine === "object" ? specOrLine : parseFeedSpec(specOrLine)
+  if (!spec) return ""
+  if (spec.kind === "hn") return spec.url.toLowerCase()
+  var m = String(spec.url).match(/^(https?:\/\/)([^\/]+)(.*)$/i)
+  if (!m) return String(spec.url).replace(/^\s+|\s+$/g, "")
+  var rest = m[3].replace(/\/+$/, "")
+  return m[1].toLowerCase() + m[2].toLowerCase() + rest
+}
+
+// Union setting feeds with state-file feeds (Panel-added), deduped.
+function mergeFeeds(primary, secondary) {
+  var seen = {}
+  var out = []
+  var lists = [primary || [], secondary || []]
+  for (var l = 0; l < lists.length; l++) {
+    for (var i = 0; i < lists[l].length; i++) {
+      var line = lists[l][i]
+      var key = feedKey(line)
+      if (key === "" || seen[key]) continue
+      seen[key] = true
+      out.push(String(line).replace(/^\s+|\s+$/g, ""))
+    }
+  }
+  return out
+}
+
 function feedLabel(source) {
+  var spec = parseFeedSpec(source)
+  if (spec && spec.label) return spec.label
+  if (spec && spec.kind === "hn") return spec.label
   if (isHnSource(source)) {
     var kind = String(source).split(":")[1] || "top"
     return "HN " + kind
@@ -150,6 +228,7 @@ function digestDue(digestTime, lastDigestDay, nowDate) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     clampInt: clampInt, parseFeeds: parseFeeds, isHnSource: isHnSource,
+    parseFeedSpec: parseFeedSpec, feedKey: feedKey, mergeFeeds: mergeFeeds,
     feedLabel: feedLabel, relativeTime: relativeTime, scoreText: scoreText,
     filterItems: filterItems, feedNames: feedNames, unreadCount: unreadCount,
     parseReadJson: parseReadJson, serializeReadJson: serializeReadJson,

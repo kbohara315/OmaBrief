@@ -26,6 +26,9 @@ Item {
   property int updatedAt: 0
   property bool lastOk: true
   property int lastErrors: 0
+  property var feedHealth: []
+  property string feedsText: ""
+  property string panelFeedsText: ""
   property bool refreshing: false
   property int refreshMinutes: 15
   property string digestTime: "09:00"
@@ -81,10 +84,40 @@ Item {
     markAllProc.running = true
   }
 
+  // Custom feeds from the popup UI. Appends/removes a feeds.txt line, then
+  // polls so the new source appears immediately. BarWidget's syncConfig
+  // union-merges these back on the next settings sync (write-config).
+  function addFeed(line) {
+    if (!line) return
+    addProc.command = ["bash", root.fetchScript, root.stateDir, "add-feed", String(line)]
+    addProc.running = true
+  }
+
+  function removeFeed(line) {
+    if (!line) return
+    removeProc.command = ["bash", root.fetchScript, root.stateDir, "remove-feed", String(line)]
+    removeProc.running = true
+  }
+
+  // One-slot queue so a click that lands while an opener is still
+  // starting up is deferred instead of dropped.
+  property string pendingUrl: ""
+
+  // Last add-feed outcome for the popup form. Empty means success/idle.
+  // feedOpSeq bumps on every add/remove completion so the popup can tell
+  // "done" apart from "no change" (setting "" over "" fires no signal).
+  property string feedNotice: ""
+  property int feedOpSeq: 0
+
   function openLink(url) {
     if (!url) return
-    if (String(url).indexOf("https://") !== 0 && String(url).indexOf("http://") !== 0) return
-    openProc.command = ["xdg-open", String(url)]
+    var u = String(url)
+    if (u.indexOf("https://") !== 0 && u.indexOf("http://") !== 0) return
+    if (openProc.running) { root.pendingUrl = u; return }
+    // Detached (&): the wrapper exits at once, so a slow browser handoff
+    // never keeps this Process busy and every click opens its own tab.
+    // The URL travels as argv ($0), never interpolated into shell code.
+    openProc.command = ["bash", "-c", "xdg-open \"$0\" >/dev/null 2>&1 &", u]
     openProc.running = true
   }
 
@@ -163,8 +196,31 @@ Item {
         root.updatedAt = s.updatedAt || 0
         root.lastOk = s.ok !== false
         root.lastErrors = s.errors || 0
+        root.feedHealth = Array.isArray(s.perFeed) ? s.perFeed : []
       } catch (e) {}
     }
+  }
+
+  // Raw feeds.txt lines (one source per line). Watched so the popup can
+  // add/remove feeds and the bar widget can union-merge them on sync.
+  property FileView feedsFile: FileView {
+    path: root.stateDir + "/feeds.txt"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.feedsText = String(text() || "")
+  }
+
+  // Feeds added from the popup UI (subset of feeds.txt). Only these show
+  // a remove affordance in the popup; Bar-settings feeds are managed in
+  // widget settings so a settings sync can never strand them.
+  property FileView panelFeedsFile: FileView {
+    path: root.stateDir + "/panel-feeds.txt"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.panelFeedsText = String(text() || "")
+    onLoadFailed: root.panelFeedsText = ""
   }
 
   property FileView digestDayFile: FileView {
@@ -183,7 +239,15 @@ Item {
       statusFile.reload()
       prefetchProc.command = ["bash", root.fetchScript, root.stateDir, "prefetch"]
       prefetchProc.running = true
+      // Cache hygiene after each poll: age out regenerable files so the
+      // state dir never grows without bound.
+      pruneProc.command = ["bash", root.fetchScript, root.stateDir, "prune"]
+      pruneProc.running = true
     }
+  }
+
+  Process {
+    id: pruneProc
   }
 
   Process {
@@ -206,7 +270,44 @@ Item {
   }
 
   Process {
+    id: addProc
+    onExited: function(code) {
+      feedsFile.reload()
+      panelFeedsFile.reload()
+      if (code === 0) {
+        root.feedNotice = ""
+        root.refresh()
+      } else if (code === 2) {
+        root.feedNotice = "Already tracking that feed."
+      } else {
+        root.feedNotice = "Couldn't add that feed — check the URL."
+      }
+      root.feedOpSeq = root.feedOpSeq + 1
+    }
+  }
+
+  Process {
+    id: removeProc
+    onExited: function(code) {
+      feedsFile.reload()
+      panelFeedsFile.reload()
+      if (code === 0) {
+        root.feedNotice = ""
+        root.refresh()
+      }
+      root.feedOpSeq = root.feedOpSeq + 1
+    }
+  }
+
+  Process {
     id: openProc
+    onExited: function(code) {
+      if (root.pendingUrl !== "") {
+        var u = root.pendingUrl
+        root.pendingUrl = ""
+        root.openLink(u)
+      }
+    }
   }
 
   Process {
@@ -274,6 +375,8 @@ Item {
       itemsFile.reload()
       readFile.reload()
       statusFile.reload()
+      feedsFile.reload()
+      panelFeedsFile.reload()
       digestDayFile.reload()
     }
   }
@@ -318,6 +421,20 @@ Item {
       if (isNaN(i) || i < 0 || i >= root.items.length) return "out of range"
       root.openLink(root.items[i].link)
       return "ok"
+    }
+
+    function add(line: string): string {
+      root.addFeed(line)
+      return "ok"
+    }
+
+    function remove(line: string): string {
+      root.removeFeed(line)
+      return "ok"
+    }
+
+    function feeds(): string {
+      return root.feedsText
     }
 
     function ping(): string {

@@ -36,7 +36,7 @@
         "key": "feeds",
         "type": "string",
         "label": "Feeds",
-        "description": "One source per line: an RSS/Atom/JSON feed URL, or hn:top, hn:best, hn:new, hn:ask, hn:show, hn:jobs with an optional :count suffix."
+        "description": "One source per line: an RSS/Atom/JSON feed URL, or hn:top, hn:best, hn:new, hn:ask, hn:show, hn:jobs with an optional :count suffix. Optional label and per-feed cap: 'Label | https://example.com/feed.xml | max:20'. Prefix a line with ! to disable it. Extra feeds can also be added from the stories popup (+) button."
       },
       {
         "key": "refreshMinutes",

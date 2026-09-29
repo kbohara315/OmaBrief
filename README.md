@@ -59,11 +59,32 @@ hl.bind("SUPER + ALT + H", hl.dsp.global("herald:herald-toggle"), { description 
 Default sources: `hn:top:30` plus `https://hackernewsrss.com/feed.xml`.
 Change them in the widget settings (one source per line — an RSS/Atom/JSON
 feed URL, or `hn:top`, `hn:best`, `hn:new`, `hn:ask`, `hn:show`, `hn:jobs`
-with an optional `:count` suffix).
+with an optional `:count` suffix). Any feed can take a custom label and a
+per-feed cap, and `!` disables a line without deleting it:
+
+```
+hn:top:30
+TechCrunch | https://techcrunch.com/feed/ | max:20
+https://lobste.rs/rss
+!https://noisy.example.com/feed.xml
+```
+
+Or press `+` in the stories popup to add a feed (URL + optional label)
+without opening settings. Popup-added feeds show a `×` on their chip to
+remove them; feeds from widget settings are managed there. Read/unread
+tracking, search, feed chips, and the morning digest cover every feed, not
+just Hacker News; the thread view only appears for stories with an HN
+discussion.
 
 The service polls in the background even while the panel is closed, keeps an
 offline cache, and posts a morning briefing notification at Digest time
 (`~/.local/state/omarchy/herald/digest.md` keeps the markdown).
+
+Reader keys: `a` article text, `t` HN thread, `o`/`Enter` open in the
+browser, `s` AI summary, `+`/`-` bigger/smaller reading text, `0` reset text
+size, `Esc` close. Sites that block automated readers (Cloudflare
+challenges and friends) get a clear "couldn't be loaded" placeholder with
+the `press o` fallback instead of raw JavaScript.
 
 ### Command line
 
@@ -73,6 +94,9 @@ omarchy-shell kshitij.herald status
 omarchy-shell kshitij.herald refresh
 omarchy-shell kshitij.herald digest
 omarchy-shell kshitij.herald open 0      # open the Nth story
+omarchy-shell kshitij.herald add "https://lobste.rs/rss"
+omarchy-shell kshitij.herald remove "https://lobste.rs/rss"   # settings-listed feeds return on the next settings sync; delete them in widget settings
+omarchy-shell kshitij.herald feeds       # list configured sources
 omarchy-shell shell summon kshitij.herald '"{}"'
 ```
 
@@ -90,7 +114,8 @@ test/           node tests for Model.js
 ```
 
 State lives under `~/.local/state/omarchy/herald/` (`items.json`,
-`read.json`, `config.json`, `feeds.txt`, `digest.md`, per-feed ETag cache).
+`read.json`, `config.json`, `feeds.txt`, `panel-feeds.txt` for popup-added
+feeds, `digest.md`, per-feed ETag cache, per-feed health in `status.json`).
 Remote content is parsed, never executed; article text is rendered as
 `Text.PlainText`; AI runs only when you enable it and press `s`, piping
 cached article text to your own command on stdin.

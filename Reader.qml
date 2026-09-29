@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -22,12 +23,32 @@ Item {
 
   readonly property color background: Color.menu.background
   readonly property color foreground: Color.menu.text
-  readonly property color border: Color.menu.border
-  readonly property var borderSpec: Border.surfaceSpec("menu", "border", border, Math.max(1, Style.space(2)))
+  // Soft neutral hairline instead of the theme's bright menu border — the
+  // frame was pulling attention off the article.
+  readonly property var borderSpec: Border.flat(
+    Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.16), 1)
   readonly property color scrim: Color.menu.scrim
   readonly property string fontFamily: Style.font.menuFamily
 
+  // Reading-text zoom: +/= bigger, - smaller, 0 resets (session-only).
+  // Applies to article paragraphs, thread replies and the AI summary —
+  // headings and chrome keep their fixed sizes.
+  property real textZoom: 1.0
+  function zoomed(px) { return Math.max(8, Math.round(px * root.textZoom)) }
+
   readonly property string articleText: articleFile.loaded ? String(articleFile.text() || "") : ""
+  // Article body split on blank lines so each paragraph renders as its own
+  // block (the extractor joins paragraphs with \n\n) — gives even spacing
+  // instead of one giant Text with uneven blank-line gaps.
+  readonly property var articleParagraphs: {
+    var parts = String(root.articleText || "").replace(/\r/g, "").split(/\n{2,}/)
+    var out = []
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i].replace(/^\s+|\s+$/g, "")
+      if (p !== "") out.push(p)
+    }
+    return out
+  }
   readonly property var threadRows: {
     if (!threadFile.loaded) return []
     try {
@@ -114,13 +135,20 @@ Item {
       anchors.centerIn: parent
       color: root.background
       borderSpec: root.borderSpec
-      padding: Style.space(20)
+      // Generous breathing room; BorderSurface only REPORTS these via
+      // content*Inset, so keyCatcher consumes them explicitly below.
+      padding: Style.space(28)
 
-      MouseArea { anchors.fill: parent; onClicked: {} }
+      MouseArea { anchors.fill: parent; onClicked: keyCatcher.forceActiveFocus() }
 
       Item {
         id: keyCatcher
         anchors.fill: parent
+        // padding is inert on its own — apply border + padding insets here.
+        anchors.topMargin: card.contentTopInset
+        anchors.rightMargin: card.contentRightInset
+        anchors.bottomMargin: card.contentBottomInset
+        anchors.leftMargin: card.contentLeftInset
         focus: true
         Keys.onPressed: function(event) {
           if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
@@ -128,87 +156,192 @@ Item {
           else if (event.key === Qt.Key_T) { root.mode = "thread"; event.accepted = true }
           else if (event.key === Qt.Key_A) { root.mode = "article"; event.accepted = true }
           else if (event.key === Qt.Key_S) { root.requestSummary(); event.accepted = true }
+          // Match the produced character too: on some layouts the +/= key
+          // arrives with a different key code but the same text.
+          else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal || event.text === "+" || event.text === "=") { root.textZoom = Math.min(2.0, root.textZoom + 0.1); event.accepted = true }
+          else if (event.key === Qt.Key_Minus || event.key === Qt.Key_Underscore || event.text === "-" || event.text === "_") { root.textZoom = Math.max(0.7, root.textZoom - 0.1); event.accepted = true }
+          else if (event.key === Qt.Key_0 || event.text === "0") { root.textZoom = 1.0; event.accepted = true }
         }
 
-        Column {
-          anchors.fill: parent
-          spacing: Style.space(10)
+        // ONE scrollable reading column: header, toolbar and body share
+        // the same capped width, centered — nothing hugs the card edge,
+        // and a long header can never squeeze the body out of view.
+        Flickable {
+          id: flick
+          width: keyCatcher.width
+          height: keyCatcher.height
+          contentWidth: width
+          contentHeight: scrollCol.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded; focusPolicy: Qt.NoFocus }
 
-          // ---- Header.
-          Text {
-            textFormat: Text.PlainText
-            width: parent.width
-            elide: Text.ElideRight
-            text: root.current ? String(root.current.title || "") : "Herald reader"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.title
-            font.bold: true
-          }
+          Column {
+            id: scrollCol
+            width: Math.min(Style.space(860), flick.width)
+            x: Math.max(0, (flick.width - width) / 2)
+            spacing: Style.space(12)
 
-          Text {
-            textFormat: Text.PlainText
-            width: parent.width
-            elide: Text.ElideRight
-            text: root.current
-              ? ((root.current.feed || "") + " · "
-                + (root.current.score ? "\u25b2" + root.current.score + " · " : "")
-                + Model.relativeTime(root.current.published || 0))
-              : ""
-            color: Qt.darker(root.foreground, 1.5)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          // ---- Mode + action bar.
-          Row {
+          // ---- Header: kicker (feed chip · score · age), then title.
+          Column {
             width: parent.width
             spacing: Style.space(8)
 
-            PanelActionButton {
-              iconText: "󰈋"
-              tooltipText: "Article text (a)"
-              foreground: root.mode === "article" ? Color.accent : root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.mode = "article"
-            }
+            Row {
+              spacing: Style.space(8)
 
-            PanelActionButton {
-              iconText: "󰌨"
-              tooltipText: "HN thread (t)"
-              foreground: root.mode === "thread" ? Color.accent : root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.mode = "thread"
-            }
+              Rectangle {
+                visible: root.current && root.current.feed
+                radius: Style.cornerRadius
+                width: kickerText.implicitWidth + Style.space(16)
+                height: kickerText.implicitHeight + Style.space(8)
+                color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.14)
 
-            PanelActionButton {
-              iconText: "󰖟"
-              tooltipText: "Open original (o)"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.openOriginal()
-            }
+                Text {
+                  id: kickerText
+                  textFormat: Text.PlainText
+                  anchors.centerIn: parent
+                  text: root.current ? String(root.current.feed || "") : ""
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
 
-            PanelActionButton {
-              visible: root.aiAvailable
-              iconText: "󰚩"
-              tooltipText: "Summarize with AI (s)"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.requestSummary()
+              Text {
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                visible: text !== ""
+                text: root.current
+                  ? ((root.current.score ? "\u25b2" + root.current.score + " · " : "")
+                    + Model.relativeTime(root.current.published || 0))
+                  : ""
+                color: Qt.darker(root.foreground, 1.7)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
-
-            Item { width: Style.space(8); height: 1 }
 
             Text {
               textFormat: Text.PlainText
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.mode === "thread"
-                ? (root.threadRows.length + " comments")
-                : (root.articleText !== "" ? (root.articleText.length + " chars") : "extracting…")
-              color: Qt.darker(root.foreground, 1.6)
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: root.current ? String(root.current.title || "") : "Herald reader"
+              color: root.foreground
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Style.font.title
+              font.bold: true
+              lineHeight: 1.25
+            }
+          }
+
+          // ---- Header / body divider.
+          Rectangle {
+            width: parent.width
+            height: 1
+            color: root.foreground
+            opacity: 0.1
+          }
+
+          // ---- Toolbar: view toggles │ actions │ status, one quiet pill.
+          Rectangle {
+            radius: Style.cornerRadius
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05)
+            width: toolbarRow.implicitWidth + Style.space(16)
+            height: toolbarRow.implicitHeight + Style.space(8)
+
+            Row {
+              id: toolbarRow
+              anchors.centerIn: parent
+              spacing: Style.space(6)
+
+              PanelActionButton {
+                iconText: "󰈋"
+                tooltipText: "Article text (a)"
+                foreground: root.mode === "article" ? Color.accent : root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.mode = "article"
+              }
+
+              PanelActionButton {
+                iconText: "󰌨"
+                tooltipText: "HN thread (t)"
+                foreground: root.mode === "thread" ? Color.accent : root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.mode = "thread"
+              }
+
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 1
+                height: Style.space(16)
+                color: root.foreground
+                opacity: 0.15
+              }
+
+              PanelActionButton {
+                iconText: "A−"
+                tooltipText: "Smaller text (−)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                enabled: root.textZoom > 0.71
+                onClicked: { root.textZoom = Math.max(0.7, root.textZoom - 0.1); keyCatcher.forceActiveFocus() }
+              }
+
+              PanelActionButton {
+                iconText: "A+"
+                tooltipText: "Bigger text (+)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                enabled: root.textZoom < 1.99
+                onClicked: { root.textZoom = Math.min(2.0, root.textZoom + 0.1); keyCatcher.forceActiveFocus() }
+              }
+
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 1
+                height: Style.space(16)
+                color: root.foreground
+                opacity: 0.15
+              }
+
+              PanelActionButton {
+                iconText: "󰖟"
+                tooltipText: "Open original (o)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.openOriginal()
+              }
+
+              PanelActionButton {
+                visible: root.aiAvailable
+                iconText: "󰚩"
+                tooltipText: "Summarize with AI (s)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.requestSummary()
+              }
+
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 1
+                height: Style.space(16)
+                color: root.foreground
+                opacity: 0.15
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                text: (root.mode === "thread"
+                  ? (root.threadRows.length + " comments")
+                  : (root.articleText !== "" ? (root.articleText.length + " chars") : "extracting…"))
+                  + " · " + Math.round(root.textZoom * 100) + "%"
+                color: Qt.darker(root.foreground, 1.7)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
           }
 
@@ -216,48 +349,94 @@ Item {
           Rectangle {
             visible: root.summaryText !== ""
             width: parent.width
-            height: summaryText.implicitHeight + Style.space(20)
+            height: summaryCol.implicitHeight + Style.space(24)
             radius: Style.cornerRadius
             color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.08)
 
-            Text {
-              id: summaryText
-              textFormat: Text.PlainText
-              anchors.fill: parent
-              anchors.margins: Style.space(10)
-              wrapMode: Text.Wrap
-              text: root.summaryText
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-          }
-
-          // ---- Body.
-          Flickable {
-            width: parent.width
-            height: parent.height - y
-            contentWidth: width
-            contentHeight: bodyColumn.implicitHeight
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-
             Column {
-              id: bodyColumn
-              width: parent.width
-              spacing: Style.space(10)
+              id: summaryCol
+              anchors.fill: parent
+              anchors.margins: Style.space(12)
+              spacing: Style.space(6)
 
-              // Article view.
               Text {
-                visible: root.mode === "article"
+                width: parent.width
+                textFormat: Text.PlainText
+                text: "✦ AI summary"
+                color: Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Text {
+                id: summaryText
                 textFormat: Text.PlainText
                 width: parent.width
                 wrapMode: Text.Wrap
-                text: root.articleText !== "" ? root.articleText : "Extracting article text…"
+                text: root.summaryText
                 color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                lineHeight: 1.4
+                font.pixelSize: root.zoomed(Style.font.body)
+                lineHeight: 1.5
+              }
+            }
+          }
+
+          // ---- Body blocks (same scroll column as the header).
+          Column {
+            id: bodyColumn
+            width: parent.width
+            spacing: Style.space(14)
+
+              // Article view: one block per paragraph, even spacing.
+              Column {
+                visible: root.mode === "article" && root.articleParagraphs.length > 0
+                width: parent.width
+                spacing: Style.space(14)
+
+                Repeater {
+                  model: root.articleParagraphs
+
+                  Text {
+                    required property var modelData
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    text: modelData
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: root.zoomed(Style.font.body)
+                    lineHeight: 1.65
+                  }
+                }
+              }
+
+              // Article placeholder while extraction runs.
+              Column {
+                visible: root.mode === "article" && root.articleParagraphs.length === 0
+                width: parent.width
+                spacing: Style.space(6)
+
+                Text {
+                  width: parent.width
+                  horizontalAlignment: Text.AlignHCenter
+                  textFormat: Text.PlainText
+                  text: "Extracting article text…"
+                  color: Qt.darker(root.foreground, 1.5)
+                  font.family: root.fontFamily
+                  font.pixelSize: root.zoomed(Style.font.body)
+                }
+
+                Text {
+                  width: parent.width
+                  horizontalAlignment: Text.AlignHCenter
+                  textFormat: Text.PlainText
+                  text: "press o to open in the browser instead"
+                  color: Qt.darker(root.foreground, 1.9)
+                  font.family: root.fontFamily
+                  font.pixelSize: root.zoomed(Style.font.caption)
+                }
               }
 
               // Thread view.
@@ -269,6 +448,18 @@ Item {
                   width: bodyColumn.width
                   height: threadRow.implicitHeight
                   property int indent: Math.min(120, (modelData.depth || 0) * Style.space(20))
+
+                  // Depth guide: thin accent rail beside nested replies.
+                  Rectangle {
+                    visible: parent.indent > 0
+                    x: -Style.space(10)
+                    y: 0
+                    width: 2
+                    height: parent.height
+                    radius: 1
+                    color: Color.accent
+                    opacity: 0.3
+                  }
 
                   Column {
                     id: threadRow
@@ -294,8 +485,8 @@ Item {
                     text: modelData.text || ""
                     color: root.foreground
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    lineHeight: 1.35
+                    font.pixelSize: root.zoomed(Style.font.body)
+                    lineHeight: 1.5
                   }
 
                   Rectangle {
@@ -310,13 +501,14 @@ Item {
 
               Text {
                 visible: root.mode === "thread" && root.threadRows.length === 0
-                textFormat: Text.PlainText
                 width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                textFormat: Text.PlainText
                 wrapMode: Text.Wrap
                 text: root.current && root.current.hnId ? "Loading thread…" : "No HN thread for this story."
                 color: Qt.darker(root.foreground, 1.5)
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: root.zoomed(Style.font.body)
               }
             }
           }

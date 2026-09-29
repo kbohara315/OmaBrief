@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import qs.Commons
 import qs.Ui
@@ -21,12 +22,46 @@ Panel {
   property string query: ""
   property string feedFilter: ""
   property bool hideRead: false
+  property bool showAddFeed: false
+  property string addError: ""
+  // True between submit and the service reporting back (feedOpSeq bump).
+  property bool addPending: false
+  readonly property string opNotice: herald ? String(herald.feedNotice || "") : ""
+  readonly property int opSeq: herald ? (herald.feedOpSeq || 0) : 0
+  onOpSeqChanged: {
+    if (root.addPending) {
+      root.addPending = false
+      if (root.opNotice === "") {
+        root.showAddFeed = false
+        addUrlField.text = ""
+        addLabelField.text = ""
+      }
+    }
+  }
 
   readonly property var allItems: herald ? herald.items : []
   readonly property var readMap: herald ? herald.readIds : ({})
   readonly property bool useScores: herald ? herald.showScores : true
   readonly property var visibleItems: Model.filterItems(allItems, root.query, root.feedFilter, root.hideRead, root.readMap)
   readonly property var feeds: Model.feedNames(allItems)
+  readonly property var panelFeedKeys: {
+    if (!herald || !herald.panelFeedsText) return ({})
+    var keys = {}
+    var lines = Model.parseFeeds(herald.panelFeedsText, "")
+    for (var i = 0; i < lines.length; i++) {
+      var k = Model.feedKey(lines[i])
+      if (k) keys[k] = true
+    }
+    return keys
+  }
+  readonly property var failedFeeds: {
+    if (!herald || !herald.feedHealth) return []
+    var out = []
+    for (var i = 0; i < herald.feedHealth.length; i++) {
+      if (herald.feedHealth[i] && herald.feedHealth[i].ok === false) out.push(herald.feedHealth[i].feed)
+    }
+    return out
+  }
   readonly property int unreadTotal: herald ? herald.unread : 0
   readonly property string updatedLabel: {
     if (!herald || !herald.updatedAt) return "never updated"
@@ -77,6 +112,44 @@ Panel {
     if (herald) herald.markRead(target.id)
     if (root.hostWidget && typeof root.hostWidget.openReader === "function")
       root.hostWidget.openReader(target)
+  }
+
+  // Source line in feeds.txt backing a displayed feed label (for remove).
+  function feedSourceFor(label) {
+    if (!herald || !herald.feedsText) return ""
+    var lines = Model.parseFeeds(herald.feedsText, "")
+    for (var i = 0; i < lines.length; i++) {
+      if (Model.feedLabel(lines[i]) === label) return lines[i]
+    }
+    return ""
+  }
+
+  function isPanelFeed(label) {
+    var src = root.feedSourceFor(label)
+    if (!src) return false
+    return root.panelFeedKeys[Model.feedKey(src)] === true
+  }
+
+  // "Label | https://… | max:20", hn:*, or a bare URL.
+  function submitFeed() {
+    root.addError = ""
+    var url = (addUrlField.text || "").replace(/^\s+|\s+$/g, "")
+    var label = (addLabelField.text || "").replace(/^\s+|\s+$/g, "")
+    if (!/^https?:\/\//i.test(url) && !/^hn\s*:/i.test(url)) {
+      root.addError = "Need an http(s) feed URL or hn:top / hn:best / …"
+      return
+    }
+    if (label !== "" && (label.indexOf("|") !== -1 || label.indexOf("\n") !== -1)) {
+      root.addError = "Label can't contain | or newlines."
+      return
+    }
+    var line = label !== "" ? label + " | " + url : url
+    if (!herald || typeof herald.addFeed !== "function") {
+      root.addError = "Service not ready — try again in a moment."
+      return
+    }
+    root.addPending = true
+    herald.addFeed(line)
   }
 
   function moveSelection(delta) {
@@ -180,6 +253,15 @@ Panel {
             fontFamily: root.contentFontFamily
             onClicked: root.hideRead = !root.hideRead
           }
+
+          PanelActionButton {
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "󰐕"
+            tooltipText: "Add a custom RSS/Atom feed"
+            foreground: root.showAddFeed ? Color.accent : root.contentForeground
+            fontFamily: root.contentFontFamily
+            onClicked: { root.showAddFeed = !root.showAddFeed; root.addError = "" }
+          }
         }
 
         TextField {
@@ -209,7 +291,7 @@ Panel {
           }
         }
 
-        // ---- Feed chips.
+        // ---- Feed chips (× removes feeds added via + Add feed).
         Flow {
           width: parent.width
           spacing: Style.space(6)
@@ -220,21 +302,52 @@ Panel {
             Rectangle {
               required property string modelData
               visible: root.feeds.length > 1
-              width: chipText.implicitWidth + Style.space(20)
-              height: chipText.implicitHeight + Style.space(10)
+              width: chipRow.implicitWidth + Style.space(20)
+              height: chipRow.implicitHeight + Style.space(10)
               radius: Style.cornerRadius
               color: root.feedFilter === modelData
                 ? Style.selectedStateColor(root.contentForeground, Color.accent)
                 : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08)
 
-              Text {
-                id: chipText
-                textFormat: Text.PlainText
+              Row {
+                id: chipRow
                 anchors.centerIn: parent
-                text: modelData
-                color: root.feedFilter === modelData ? Color.background : root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
+                spacing: Style.space(6)
+
+                Text {
+                  id: chipText
+                  textFormat: Text.PlainText
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: modelData
+                  color: root.feedFilter === modelData ? Color.background : root.contentForeground
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: root.isPanelFeed(modelData)
+                  text: "×"
+                  color: root.feedFilter === modelData ? Color.background : root.contentForeground
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+
+                  MouseArea {
+                    // Above the chip-wide MouseArea below so × clicks
+                    // remove instead of filtering.
+                    z: 1
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      var src = root.feedSourceFor(modelData)
+                      if (src && root.herald) {
+                        if (root.feedFilter === modelData) root.feedFilter = ""
+                        root.herald.removeFeed(src)
+                      }
+                    }
+                  }
+                }
               }
 
               MouseArea {
@@ -249,6 +362,86 @@ Panel {
           }
         }
 
+        // ---- Add custom feed form.
+        Column {
+          visible: root.showAddFeed
+          width: parent.width
+          spacing: Style.space(6)
+
+          TextField {
+            id: addUrlField
+            width: parent.width
+            placeholderText: "Feed URL or hn:best …"
+            foreground: root.contentForeground
+            font.family: root.contentFontFamily
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                root.submitFeed()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Escape) {
+                root.showAddFeed = false
+                keyCatcher.forceActiveFocus()
+                event.accepted = true
+              }
+            }
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            TextField {
+              id: addLabelField
+              width: parent.width - addButton.width - Style.space(6)
+              placeholderText: "Label (optional)"
+              foreground: root.contentForeground
+              font.family: root.contentFontFamily
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  root.submitFeed()
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Escape) {
+                  root.showAddFeed = false
+                  keyCatcher.forceActiveFocus()
+                  event.accepted = true
+                }
+              }
+            }
+
+            PanelActionButton {
+              id: addButton
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰄬"
+              tooltipText: "Add feed"
+              foreground: Color.accent
+              fontFamily: root.contentFontFamily
+              onClicked: root.submitFeed()
+            }
+          }
+
+          Text {
+            visible: root.addError !== "" || root.opNotice !== ""
+            textFormat: Text.PlainText
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: root.addError !== "" ? root.addError : root.opNotice
+            color: Color.accent
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            visible: root.addError === "" && root.opNotice === ""
+            textFormat: Text.PlainText
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: "Any RSS/Atom/JSON feed. Bar-settings feeds are managed in widget settings."
+            color: Qt.darker(root.contentForeground, 1.6)
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
         // ---- Story list.
         ListView {
           id: storyList
@@ -258,6 +451,7 @@ Panel {
           boundsBehavior: Flickable.StopAtBounds
           model: root.visibleItems
           currentIndex: 0
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
           delegate: Item {
             required property var modelData
@@ -342,6 +536,7 @@ Panel {
             textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             text: root.updatedLabel + (root.herald && root.herald.refreshing ? " · fetching…" : "")
+              + (root.failedFeeds.length > 0 ? " · " + root.failedFeeds.length + " feed failed" + (root.failedFeeds.length > 1 ? "s" : "") : "")
             color: Qt.darker(root.contentForeground, 1.6)
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption

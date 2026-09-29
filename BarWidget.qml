@@ -74,9 +74,13 @@ BarWidget {
   }
 
   // Push shell.json settings down to the service config + feeds file.
+  // Union-merges feeds added from the popup UI (herald.feedsText) so a
+  // settings sync never clobbers them; removals of settings-listed feeds
+  // must be done in Bar settings.
   function syncConfig() {
     if (!root.herald) return
     var feeds = Model.parseFeeds(setting("feeds", "hn:top:30\nhttps://hackernewsrss.com/feed.xml"))
+    if (root.herald.feedsText) feeds = Model.mergeFeeds(feeds, Model.parseFeeds(root.herald.feedsText, ""))
     var config = {
       refreshMinutes: Model.clampInt(setting("refreshMinutes", 15), 15, 2, 1440),
       storyCount: Model.clampInt(setting("storyCount", 30), 30, 1, 100),

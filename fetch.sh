@@ -18,6 +18,19 @@ MODE="${2:?usage: fetch.sh STATE_DIR <poll|comments|article|digest|write-config>
 
 HN_API="https://hacker-news.firebaseio.com/v0"
 UA="herald-omarchy-plugin/0.1.0"
+# Article pages fetch with browser-like headers — a plain curl UA/headers
+# trips naive bot checks and gets challenge pages instead of content. Feeds
+# keep the honest UA above; only page extraction disguises itself.
+ARTICLE_CURL=(
+  -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+  -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+  -H 'Accept-Language: en-US,en;q=0.9'
+  -H 'Upgrade-Insecure-Requests: 1'
+  -H 'Sec-Fetch-Dest: document'
+  -H 'Sec-Fetch-Mode: navigate'
+  -H 'Sec-Fetch-Site: none'
+  -H 'Sec-Fetch-User: ?1'
+)
 MAX_BYTES=5242880
 SEP="|~|"
 
@@ -82,6 +95,10 @@ fetch_url() {
       ;;
     304)
       rm -f "$raw.new"
+      # Refresh mtime so the age-based prune below never evicts a feed
+      # that is still being polled (content just happens to be unchanged).
+      [ -f "$raw" ] && touch "$raw"
+      [ -f "$etag" ] && touch "$etag"
       printf '304\n' >"$STATE/.fetch-code-$key"
       [ -f "$raw" ] && printf '%s' "$raw"
       ;;
@@ -246,65 +263,167 @@ hn_items() { # kind count feedlabel outfile
 
 # ------------------------------------------------------------------ poll ---
 
+# --------------------------------------------------------------- feed spec ---
+# Parse one feeds.txt line into SPEC_* globals. Supported forms:
+#   hn:top:30 | https://url | Label | url | url | max:N | Label | url | max:N
+# A leading "!" disables the line (fetch_source returns 2 = skipped).
+SPEC_KIND=""; SPEC_LABEL=""; SPEC_URL=""; SPEC_MAX=0
+parse_feed_spec() { # line
+  local line="$1" part rest hkind hcount
+  SPEC_KIND="rss"; SPEC_LABEL=""; SPEC_URL=""; SPEC_MAX=0
+  line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  case "$line" in ''|\#*) return 1 ;; esac
+  case "$line" in '!'*) return 2 ;; esac
+  # Split on "|" via parameter expansion (no word splitting, so URL
+  # query strings like ?x=1 survive glob-free).
+  rest="$line|"
+  while [ -n "$rest" ]; do
+    part="${rest%%|*}"
+    rest="${rest#*|}"
+    part="$(printf '%s' "$part" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -z "$part" ] && continue
+    case "$part" in
+      [Mm][Aa][Xx]:*)
+        SPEC_MAX="$(printf '%s' "$part" | cut -d: -f2 | tr -cd '0-9')"
+        [ -z "$SPEC_MAX" ] && SPEC_MAX=0
+        ;;
+      [Hh][Nn]:*)
+        hkind="$(printf '%s' "$part" | cut -d: -f2 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        hcount="$(printf '%s' "$part" | cut -d: -f3 | tr -cd '0-9')"
+        case "$hkind" in top|best|new|ask|show|job|jobs) ;; *) hkind="top" ;; esac
+        [ "$hkind" = "jobs" ] && hkind="job"
+        SPEC_KIND="hn"
+        SPEC_URL="hn:$hkind"
+        [ -n "$hcount" ] && SPEC_URL="$SPEC_URL:$hcount"
+        ;;
+      [Hh][Tt][Tt][Pp]*://*)
+        SPEC_KIND="rss"; SPEC_URL="$part"
+        ;;
+      *)
+        SPEC_LABEL="$part"
+        ;;
+    esac
+  done
+  [ -z "$SPEC_URL" ] && return 1
+  if [ "$SPEC_KIND" = "rss" ] && [ -z "$SPEC_LABEL" ]; then
+    SPEC_LABEL="$(printf '%s' "$SPEC_URL" | sed 's#https\?://##; s#/.*##')"
+  fi
+  if [ "$SPEC_KIND" = "hn" ] && [ -z "$SPEC_LABEL" ]; then
+    SPEC_LABEL="HN $(printf '%s' "$SPEC_URL" | cut -d: -f2)"
+  fi
+  return 0
+}
+
+# Normalized key for dedupe/compare: hn lowercased, URLs host-lowercased
+# with trailing slashes stripped.
+feed_key() { # line -> key on stdout
+  local key scheme rest host path
+  parse_feed_spec "$1" || return 1
+  if [ "$SPEC_KIND" = "hn" ]; then
+    printf '%s' "$SPEC_URL" | tr '[:upper:]' '[:lower:]'
+  else
+    key="$(printf '%s' "$SPEC_URL" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    scheme="$(printf '%s' "$key" | grep -o '^[Hh][Tt][Tt][Pp][Ss]\?://' | tr '[:upper:]' '[:lower:]')"
+    rest="${key#*://}"
+    host="$(printf '%s' "$rest" | cut -d/ -f1 | tr '[:upper:]' '[:lower:]')"
+    path="$(printf '%s' "$rest" | cut -d/ -f2- -s)"
+    if [ -z "$path" ] || [ "$path" = "$rest" ]; then
+      printf '%s%s' "$scheme" "$host"
+    else
+      path="$(printf '/%s' "$path" | sed -E 's#/+$##')"
+      [ "$path" = "/" ] && path=""
+      printf '%s%s%s' "$scheme" "$host" "$path"
+    fi
+  fi
+}
+
 fetch_source() { # line index : fetch+parse ONE source into .src.N.json ; exit 1 on failure
-  local line="$1" n="$2" kind count feed raw
-  case "$line" in
-    hn:*)
-      kind=$(printf '%s' "$line" | cut -d: -f2)
-      count=$(printf '%s' "$line" | cut -d: -f3)
+  local line="$1" n="$2" kind count feed raw max per
+  parse_feed_spec "$line" || return 1
+  per="$SPEC_MAX"
+  [ "$per" -le 0 ] 2>/dev/null && per="$MAX_PER_FEED"
+  feed="$SPEC_LABEL"
+  case "$SPEC_KIND" in
+    hn)
+      kind=$(printf '%s' "$SPEC_URL" | cut -d: -f2)
+      count=$(printf '%s' "$SPEC_URL" | cut -d: -f3)
       case "$kind" in top|best|new|ask|show|job) ;; *) kind="top" ;; esac
       case "$count" in ''|*[!0-9]*) count="$STORY_COUNT" ;; esac
-      hn_items "$kind" "$count" "HN $kind" "$STATE/.src.$n.json" || return 1
+      [ -z "$feed" ] && feed="HN $kind"
+      hn_items "$kind" "$count" "$feed" "$STATE/.src.$n.json" || return 1
+      printf '%s' "$feed" >"$STATE/.src.$n.label"
       ;;
     *)
-      raw=$(fetch_url "$line" "rss")
+      raw=$(fetch_url "$SPEC_URL" "rss")
       [ -n "$raw" ] || return 1
-      feed=$(printf '%s' "$line" | sed 's#https\?://##; s#/.*##')
+      sha1 "$SPEC_URL" >"$STATE/.src.$n.urlkey"
       if head -c 200 "$raw" | grep -q '"version"[[:space:]]*:[[:space:]]*"https://jsonfeed.org'; then
-        parse_jsonfeed "$raw" "$feed" "$MAX_PER_FEED" "$STATE/.src.$n.json"
+        parse_jsonfeed "$raw" "$feed" "$per" "$STATE/.src.$n.json"
       else
-        parse_rss "$raw" "$feed" "$MAX_PER_FEED" "$STATE/.src.$n.json"
+        parse_rss "$raw" "$feed" "$per" "$STATE/.src.$n.json"
       fi
+      printf '%s' "$feed" >"$STATE/.src.$n.label"
       ;;
   esac
 }
 
 do_poll() {
   read_config
-  local feeds="$STATE/feeds.txt" errors=0 parts=() source_lines=() n=0 line
+  local feeds="$STATE/feeds.txt" errors=0 parts=() source_lines=() source_keys=() n=0 line
   [ -f "$feeds" ] || { printf '[]' | atomic_write "$STATE/items.json"; return 0; }
   # Phase 1: fetch+parse every source with at most 8 in flight.
   local running=0
   declare -A seen_source=()
   while IFS= read -r line || [ -n "$line" ]; do
     line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-    case "$line" in ''|\#*) continue ;; esac
-    [ -n "${seen_source["$line"]:-}" ] && continue
-    seen_source["$line"]=1
+    case "$line" in ''|\#*|'!'*) continue ;; esac
+    local dkey
+    dkey=$(feed_key "$line" 2>/dev/null) || continue
+    [ -n "${seen_source["$dkey"]:-}" ] && continue
+    seen_source["$dkey"]=1
     n=$((n + 1))
     fetch_source "$line" "$n" >>"$STATE/fetch.log" 2>&1 &
     running=$((running + 1))
     if [ "$running" -ge 8 ]; then wait -n; running=$((running - 1)); fi
     parts+=("$STATE/.src.$n.json")
     source_lines+=("$line")
+    source_keys+=("$dkey")
   done <"$feeds"
   wait
+  if [ "$n" -eq 0 ]; then
+    printf '[]' | atomic_write "$STATE/items.json"
+    jq -n --argjson updated "$(now_epoch)" \
+      '{updatedAt:$updated, ok:true, errors:0, count:0, perFeed:[]}' \
+      | atomic_write "$STATE/status.json"
+    return 0
+  fi
   # Phase 2: merge. Sources that failed keep no file; count them as errors.
-  local merged=()
-  for f in ${parts[@]+"${parts[@]}"}; do
-    if [ -s "$f" ]; then merged+=("$f"); else printf '[]' >"$f"; errors=$((errors + 1)); fi
+  local merged=() perfeed_tmp ok_i
+  perfeed_tmp="$(mktemp "$STATE/.tmp.XXXXXX")" || return 1
+  : >"$perfeed_tmp"
+  for ((ok_i=0; ok_i<${#parts[@]}; ok_i++)); do
+    local f="${parts[$ok_i]}" lbl cnt ok
+    lbl=""; [ -f "$STATE/.src.$((ok_i + 1)).label" ] && lbl="$(cat "$STATE/.src.$((ok_i + 1)).label")"
+    [ -z "$lbl" ] && lbl="${source_lines[$ok_i]}"
+    if [ -s "$f" ]; then merged+=("$f"); ok=true; else printf '[]' >"$f"; merged+=("$f"); errors=$((errors + 1)); ok=false; fi
+    cnt="$(jq 'length' "$f" 2>/dev/null || echo 0)"
+    jq -n --arg feed "$lbl" --arg key "${source_keys[$ok_i]}" --argjson ok "$ok" --argjson count "$cnt" \
+      '{feed:$feed,key:$key,ok:$ok,count:$count}' >>"$perfeed_tmp"
   done
-  if [ "$n" -eq 0 ]; then printf '[]' | atomic_write "$STATE/items.json"; else
-    local changed=0
+  { local changed=0
     for ((source_no=0; source_no<${#parts[@]}; source_no++)); do
       f="${parts[$source_no]}"
       if [ -f "$f" ]; then
-        local key source_line
+        local ukey source_line
         source_line="${source_lines[$source_no]}"
-        case "$source_line" in
-          hn:*) changed=1 ;;
-          *) key=$(sha1 "$source_line"); [ "$(cat "$STATE/.fetch-code-$key" 2>/dev/null)" != 304 ] && changed=1 ;;
-        esac
+        if parse_feed_spec "$source_line" 2>/dev/null && [ "$SPEC_KIND" = "hn" ]; then
+          changed=1
+        elif [ -f "$STATE/.src.$((source_no + 1)).urlkey" ]; then
+          ukey="$(cat "$STATE/.src.$((source_no + 1)).urlkey")"
+          [ "$(cat "$STATE/.fetch-code-$ukey" 2>/dev/null)" != 304 ] && changed=1
+        else
+          changed=1
+        fi
       fi
     done
     if [ "$changed" -eq 0 ] && [ -s "$STATE/items.json" ]; then
@@ -314,13 +433,15 @@ do_poll() {
       "${merged[@]}" 2>/dev/null | atomic_write "$STATE/items.json" \
       || printf '[]' | atomic_write "$STATE/items.json"
     fi
-  fi
-  rm -f "$STATE"/.src.*.json
+  }
+  rm -f "$STATE"/.src.*.json "$STATE"/.src.*.label "$STATE"/.src.*.urlkey
   rm -f "$STATE"/.fetch-code-*
   jq -n --argjson updated "$(now_epoch)" --argjson errors "$errors" \
     --argjson count "$(jq 'length' "$STATE/items.json" 2>/dev/null || echo 0)" \
-    '{updatedAt:$updated, ok: ($errors == 0), errors:$errors, count:$count}' \
+    --slurpfile perfeed "$perfeed_tmp" \
+    '{updatedAt:$updated, ok: ($errors == 0), errors:$errors, count:$count, perFeed:$perfeed}' \
     | atomic_write "$STATE/status.json"
+  rm -f "$perfeed_tmp"
 }
 
 # --------------------------------------------------------------- comments ---
@@ -403,30 +524,81 @@ do_comments() { # HNID ; prints thread json path
 
 # ---------------------------------------------------------------- article ---
 
+# Body text that means "anti-bot challenge page" rather than the article.
+# Only consulted for SHORT extractions: a long page merely discussing these
+# topics keeps its text, while a stripped-down challenge page (typically a
+# single "Enable JavaScript…" line) is caught here.
+is_blocked_text() {
+  LC_ALL=C grep -qiE \
+    'enable javascript and cookies|cf_chl_|checking your browser before accessing|attention required! \| cloudflare|pardon our interruption|making sure you.re not a bot' \
+    "$1" 2>/dev/null
+}
+
+# Honest placeholder for pages the reader could not turn into text —
+# challenge HTML, HTTP errors, empty extractions. do_summarize recognises
+# the first line and never pipes this into the AI.
+article_placeholder() { # DEST HINT
+  {
+    printf "This page couldn't be loaded in the reader%s.\n\n" "$2"
+    printf 'Press o to open it in your browser instead.\n'
+  } | atomic_write "$1"
+}
+
 do_article() { # URL ; prints cache path
-  local url="$1" key raw tmp i count para
+  local url="$1" key raw out tmp i count para code bytes
   key=$(sha1 "$url")
   raw="$STATE/articles/$key.html"
-  curl -sS --max-time 20 --max-filesize 2097152 -A "$UA" --compressed \
-    -o "$raw" "$url" 2>>"$STATE/fetch.log" || { rm -f "$raw"; return 1; }
-  [ -s "$raw" ] || return 1
+  out="$STATE/articles/$key.txt"
+  # Follow redirects (browsers do; a 301 target used to yield an empty
+  # extraction) and record the final status to reject error pages early.
+  code=$(curl -sS -L --max-redirs 5 --max-time 20 --max-filesize 2097152 \
+    "${ARTICLE_CURL[@]}" --compressed -o "$raw" -w '%{http_code}' \
+    "$url" 2>>"$STATE/fetch.log") || code="000"
+  if [ "$code" = "000" ] || [ ! -s "$raw" ]; then
+    rm -f "$raw"
+    article_placeholder "$out" " (network error)"
+    printf '%s\n' "$out"
+    return 0
+  fi
   tmp="$(mktemp "$STATE/.tmp.XXXXXX")" || return 1
-  count=$(xmllint --html --recover --xpath 'count(//p)' "$raw" 2>/dev/null | cut -d. -f1)
+  if [ "$code" != "200" ]; then
+    rm -f "$tmp" "$raw"
+    article_placeholder "$out" " (HTTP $code)"
+    printf '%s\n' "$out"
+    return 0
+  fi
+  count=$(xmllint --html --recover --xpath 'count(//p[not(ancestor::noscript)])' "$raw" 2>/dev/null | cut -d. -f1)
   [ -z "$count" ] && count=0
   [ "$count" -gt 40 ] && count=40
   i=1
   : >"$tmp.txt"
   while [ "$i" -le "$count" ]; do
-    para=$(xmllint --html --recover --xpath "normalize-space(string((//p)[$i]))" "$raw" 2>/dev/null)
+    para=$(xmllint --html --recover --xpath "normalize-space(string((//p[not(ancestor::noscript)])[${i}]))" "$raw" 2>/dev/null)
     if [ "${#para}" -ge 40 ]; then printf '%s\n\n' "$para" >>"$tmp.txt"; fi
     i=$((i + 1))
   done
   if [ ! -s "$tmp.txt" ]; then
-    xmllint --html --recover --xpath 'normalize-space(string(//body))' "$raw" 2>/dev/null | head -c 12000 >"$tmp.txt" || true
+    # string(//body) also dumped inline <script> contents — that is how
+    # Cloudflare's challenge JS leaked into articles. Take only text nodes
+    # outside script/style/noscript instead.
+    xmllint --html --recover --xpath \
+      '//body//text()[not(ancestor::script) and not(ancestor::style) and not(ancestor::noscript)]' \
+      "$raw" 2>/dev/null | strip_newlines | head -c 12000 >"$tmp.txt" || true
   fi
-  head -c 20000 "$tmp.txt" | atomic_write "$STATE/articles/$key.txt"
-  rm -f "$tmp.txt" "$tmp"
-  printf '%s\n' "$STATE/articles/$key.txt"
+  bytes=$(wc -c <"$tmp.txt" 2>/dev/null || printf 0)
+  if [ ! -s "$tmp.txt" ] || [ "$bytes" -lt 60 ] ||
+    { [ "$bytes" -lt 800 ] && is_blocked_text "$tmp.txt"; }; then
+    rm -f "$tmp.txt" "$tmp" "$raw"
+    article_placeholder "$out" ""
+    printf '%s\n' "$out"
+    return 0
+  fi
+  head -c 20000 "$tmp.txt" | atomic_write "$out"
+  # Only the .txt is ever read (reader + summarize); the raw HTML is
+  # re-downloaded on every open anyway, so drop it instead of letting it
+  # accumulate — it was 6.8M after two days of normal use.
+  rm -f "$tmp.txt" "$tmp" "$raw"
+  printf '%s\n' "$out"
 }
 
 # ----------------------------------------------------------------- digest ---
@@ -470,13 +642,134 @@ do_prefetch() {
   ' "$STATE/items.json" 2>/dev/null)
 }
 
+# ------------------------------------------------------------- prune ---
+# Size discipline for the state dir, run after every poll. Everything
+# pruned here is regenerable: article extracts re-curl on open, HN
+# payloads re-fetch on the next poll, threads re-fetch on "c". The two
+# stateful files are capped at write time instead: read.json = 800 ids,
+# items.json = 500 items.
+do_prune() {
+  # Article extracts: 7 days old OR beyond the newest 100 files.
+  find "$STATE/articles" -type f -mtime +7 -delete 2>/dev/null || true
+  ls -t "$STATE"/articles/* 2>/dev/null | tail -n +101 | xargs -r rm -f --
+  # Raw HTML leftovers (only written by older builds; new do_article drops
+  # it inline). 60-minute grace so an in-flight extraction is never hit.
+  find "$STATE/articles" -name '*.html' -mmin +60 -delete 2>/dev/null || true
+  # HN payloads: 14 days (front-page stories churn much faster).
+  find "$STATE/hn" -type f -mtime +14 -delete 2>/dev/null || true
+  # Assembled comment threads: 7 days.
+  find "$STATE" -maxdepth 1 -name 'thread-*.json' -mtime +7 -delete 2>/dev/null || true
+  # Feed bodies + ETags: age together — an ETag without its body would
+  # make fetch_url treat a fresh 304 as a failure.
+  find "$STATE/cache" "$STATE/etags" -type f -mtime +14 -delete 2>/dev/null || true
+  # Temp files from interrupted runs.
+  find "$STATE" -maxdepth 1 -name '.tmp.*' -mmin +60 -delete 2>/dev/null || true
+  # fetch.log: keep a 1000-line tail once it passes 256 KiB.
+  local logsz
+  logsz=$(stat -c %s "$STATE/fetch.log" 2>/dev/null || echo 0)
+  if [ "$logsz" -gt 262144 ]; then
+    tail -n 1000 "$STATE/fetch.log" | atomic_write "$STATE/fetch.log"
+  fi
+}
+
 # ------------------------------------------------------------ write-config ---
 
 do_write_config() { # JSON
   printf '%s' "$3" | jq -e . >/dev/null 2>&1 || exit 1
   printf '%s' "$3" | jq '{refreshMinutes, storyCount, maxItemsPerFeed, digestTime, aiEnabled, aiCommand, showScores}' \
     | atomic_write "$STATE/config.json"
-  printf '%s' "$3" | jq -r '.feeds // [] | .[]' 2>/dev/null | atomic_write "$STATE/feeds.txt"
+  # feeds.txt = settings feeds + Panel-added feeds (panel-feeds.txt), deduped
+  # by normalized key. Panel additions survive settings syncs; removing a
+  # feed from Bar settings removes it (unless also Panel-added).
+  local incoming="$STATE/.incoming-feeds.$$" merged="$STATE/.merged-feeds.$$"
+  printf '%s' "$3" | jq -r '.feeds // [] | .[]' 2>/dev/null >"$incoming" || : >"$incoming"
+  : >"$merged"
+  declare -A seen_write=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    case "$trimmed" in ''|\#*) printf '%s\n' "$line" >>"$merged"; continue ;; esac
+    key=$(feed_key "$line" 2>/dev/null) || { printf '%s\n' "$line" >>"$merged"; continue; }
+    [ -n "${seen_write["$key"]:-}" ] && continue
+    seen_write["$key"]=1
+    printf '%s\n' "$line" >>"$merged"
+  done <"$incoming"
+  if [ -f "$STATE/panel-feeds.txt" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      trimmed="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      case "$trimmed" in ''|\#*) continue ;; esac
+      # A leading "!" disables without deleting: key on the stripped form
+      # but preserve the line verbatim.
+      kline="$trimmed"
+      case "$kline" in '!'*) kline="$(printf '%s' "$kline" | sed 's/^![[:space:]]*//')" ;; esac
+      key=$(feed_key "$kline" 2>/dev/null) || continue
+      [ -n "${seen_write["$key"]:-}" ] && continue
+      seen_write["$key"]=1
+      printf '%s\n' "$line" >>"$merged"
+    done <"$STATE/panel-feeds.txt"
+  fi
+  cat "$merged" | atomic_write "$STATE/feeds.txt"
+  rm -f "$incoming" "$merged"
+}
+
+# ---------------------------------------------------------------- add-feed ---
+# Append a feed line if its normalized key is not already present.
+# Prints the resulting feeds.txt path. Exit 2 on duplicate, 1 on bad input.
+
+do_add_feed() { # LINE
+  local line="${3:?add-feed needs a feed line}" key existing ekey
+  case "$line" in ''|\#*) exit 1 ;; esac
+  key=$(feed_key "$line") || exit 1
+  [ -f "$STATE/feeds.txt" ] || : >"$STATE/feeds.txt"
+  [ -f "$STATE/panel-feeds.txt" ] || : >"$STATE/panel-feeds.txt"
+  while IFS= read -r existing || [ -n "$existing" ]; do
+    ekey=$(feed_key "$existing" 2>/dev/null) || continue
+    [ "$ekey" = "$key" ] && exit 2
+  done <"$STATE/feeds.txt"
+  printf '%s\n' "$line" >>"$STATE/feeds.txt"
+  printf '%s\n' "$line" >>"$STATE/panel-feeds.txt"
+  printf '%s\n' "$STATE/feeds.txt"
+}
+
+# Remove every feeds.txt line whose normalized key matches the given line/URL.
+# Also drops it from panel-feeds.txt so a later settings sync won't re-add it.
+do_remove_feed() { # LINE-or-URL
+  local line="${3:?remove-feed needs a feed line or URL}" key tmp removed=0
+  key=$(feed_key "$line" 2>/dev/null) || key="$line"
+  [ -f "$STATE/feeds.txt" ] || exit 0
+  tmp="$(mktemp "$STATE/.tmp.XXXXXX")" || exit 1
+  while IFS= read -r existing || [ -n "$existing" ]; do
+    ekey=$(feed_key "$existing" 2>/dev/null) || { printf '%s\n' "$existing" >>"$tmp"; continue; }
+    if [ "$ekey" = "$key" ]; then removed=$((removed + 1)); else printf '%s\n' "$existing" >>"$tmp"; fi
+  done <"$STATE/feeds.txt"
+  cat "$tmp" | atomic_write "$STATE/feeds.txt"
+  if [ -f "$STATE/panel-feeds.txt" ]; then
+    : >"$tmp"
+    while IFS= read -r existing || [ -n "$existing" ]; do
+      ekey=$(feed_key "$existing" 2>/dev/null) || { printf '%s\n' "$existing" >>"$tmp"; continue; }
+      [ "$ekey" = "$key" ] || printf '%s\n' "$existing" >>"$tmp"
+    done <"$STATE/panel-feeds.txt"
+    cat "$tmp" | atomic_write "$STATE/panel-feeds.txt"
+  fi
+  rm -f "$tmp"
+  printf '%d\n' "$removed"
+}
+
+# Fetch one URL and report item count without touching state (for Add UI).
+do_probe() { # URL
+  local url="${3:?probe needs URL}" raw tmp n
+  case "$url" in http://*|https://*) ;; *) printf '{"ok":false,"error":"need http(s) URL"}\n'; exit 1 ;; esac
+  read_config
+  raw=$(fetch_url "$url" "probe")
+  [ -n "$raw" ] || { printf '{"ok":false,"error":"fetch failed"}\n'; exit 1; }
+  tmp="$STATE/.probe.$$.json"
+  if head -c 200 "$raw" | grep -q '"version"[[:space:]]*:[[:space:]]*"https://jsonfeed.org'; then
+    parse_jsonfeed "$raw" probe "$MAX_PER_FEED" "$tmp"
+  else
+    parse_rss "$raw" probe "$MAX_PER_FEED" "$tmp"
+  fi
+  n="$(jq 'length' "$tmp" 2>/dev/null || echo 0)"
+  rm -f "$tmp"
+  jq -n --argjson count "$n" '{ok: ($count > 0), count: $count}'
 }
 
 # --------------------------------------------------------------- summarize ---
@@ -488,6 +781,11 @@ do_summarize() { # CACHEFILE AICOMMAND...
   shift 3
   [ -f "$cache" ] || exit 1
   [ "$#" -gt 0 ] || exit 1
+  # Placeholder pages never reach the AI — answer directly, no API call.
+  if head -c 300 "$cache" | grep -qF "couldn't be loaded in the reader"; then
+    printf 'No article text to summarize — the site blocked the reader. Press o to open it in the browser.'
+    return 0
+  fi
   head -c 12000 "$cache" | "$@" 2>>"$STATE/fetch.log" | head -c 4000
 }
 
@@ -506,6 +804,7 @@ do_mark_all_read() {
 case "$MODE" in
   poll) do_poll ;;
   prefetch) do_prefetch ;;
+  prune) do_prune ;;
   comments) do_comments "${3:?comments needs HNID}" ;;
   article) do_article "${3:?article needs URL}" ;;
   digest) do_digest ;;
@@ -513,5 +812,8 @@ case "$MODE" in
   mark-read) do_mark_read "$@" ;;
   mark-all-read) do_mark_all_read ;;
   summarize) do_summarize "$@" ;;
+  add-feed) do_add_feed "$@" ;;
+  remove-feed) do_remove_feed "$@" ;;
+  probe) do_probe "$@" ;;
   *) printf 'unknown mode: %s\n' "$MODE" >&2; exit 1 ;;
 esac

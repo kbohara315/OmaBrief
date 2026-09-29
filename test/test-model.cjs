@@ -11,9 +11,33 @@ assert.equal(M.clampInt("99", 10, 2, 60), 60);
 assert.deepEqual(M.parseFeeds("hn:top:30\nhttps://a.com/x.xml\n# c\n  \n", ""), ["hn:top:30", "https://a.com/x.xml"]);
 assert.deepEqual(M.parseFeeds(undefined, "hn:new"), ["hn:new"]);
 
+// parseFeedSpec
+assert.deepEqual(M.parseFeedSpec("hn:top:30"), { raw: "hn:top:30", disabled: false, kind: "hn", url: "hn:top:30", label: "HN top", max: 0, count: 30 });
+assert.deepEqual(M.parseFeedSpec("https://a.com/x.xml"), { raw: "https://a.com/x.xml", disabled: false, kind: "rss", url: "https://a.com/x.xml", label: "", max: 0, count: 0 });
+assert.deepEqual(M.parseFeedSpec("Lobsters | https://lobste.rs/rss"), { raw: "Lobsters | https://lobste.rs/rss", disabled: false, kind: "rss", url: "https://lobste.rs/rss", label: "Lobsters", max: 0, count: 0 });
+assert.deepEqual(M.parseFeedSpec("TC | https://t.com/f.xml | max:20"), { raw: "TC | https://t.com/f.xml | max:20", disabled: false, kind: "rss", url: "https://t.com/f.xml", label: "TC", max: 20, count: 0 });
+assert.deepEqual(M.parseFeedSpec("My HN | hn:best:10"), { raw: "My HN | hn:best:10", disabled: false, kind: "hn", url: "hn:best:10", label: "My HN", max: 0, count: 10 });
+assert.equal(M.parseFeedSpec("!https://a.com/x.xml").disabled, true);
+assert.equal(M.parseFeedSpec("# comment"), null);
+assert.equal(M.parseFeedSpec("   "), null);
+assert.equal(M.parseFeedSpec("not a feed"), null);
+
+// feedKey dedupe: case + trailing slash insensitive
+assert.equal(M.feedKey("https://A.com/x.xml/"), M.feedKey("https://a.com/x.xml"));
+assert.equal(M.feedKey("Lobsters | https://lobste.rs/rss"), M.feedKey("https://lobste.rs/rss"));
+assert.equal(M.feedKey("HN:TOP:30"), "hn:top:30");
+
+// mergeFeeds: union, settings first, deduped
+assert.deepEqual(
+  M.mergeFeeds(["hn:top:30", "https://a.com/x.xml"], ["https://a.com/x.xml", "B | https://b.com/f"]),
+  ["hn:top:30", "https://a.com/x.xml", "B | https://b.com/f"]
+);
+
 // feedLabel
 assert.equal(M.feedLabel("hn:top:30"), "HN top");
 assert.equal(M.feedLabel("https://hackernewsrss.com/feed.xml"), "hackernewsrss.com");
+assert.equal(M.feedLabel("Lobsters | https://lobste.rs/rss"), "Lobsters");
+assert.equal(M.feedLabel("https://a.com/x.xml | max:5"), "a.com");
 
 // relativeTime
 assert.equal(M.relativeTime(1000, 1030), "just now");
