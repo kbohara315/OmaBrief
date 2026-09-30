@@ -18,23 +18,23 @@ BarWidget {
   readonly property var omabrief: (bar && bar.shell && typeof bar.shell.serviceFor === "function")
     ? bar.shell.serviceFor("kshitij.omabrief") : null
 
-  readonly property var feedItems: brief ? brief.items : []
-  readonly property var readMap: brief ? brief.readIds : ({})
-  readonly property int unreadCount: brief ? brief.unread : 0
-  readonly property bool isRefreshing: brief ? brief.refreshing : false
-  readonly property bool useScores: brief ? brief.showScores : (setting("showScores", true) !== false)
+  readonly property var feedItems: omabrief ? omabrief.items : []
+  readonly property var readMap: omabrief ? omabrief.readIds : ({})
+  readonly property int unreadCount: omabrief ? omabrief.unread : 0
+  readonly property bool isRefreshing: omabrief ? omabrief.refreshing : false
+  readonly property bool useScores: omabrief ? omabrief.showScores : (setting("showScores", true) !== false)
 
   readonly property int tickerSeconds: Model.clampInt(setting("tickerSeconds", 6), 6, 0, 120)
   property int tickerIndex: 0
 
   readonly property string headline: {
-    if (feedItems.length === 0) return brief && brief.refreshing ? "OmaBrief fetching…" : "OmaBrief"
+    if (feedItems.length === 0) return omabrief && omabrief.refreshing ? "OmaBrief fetching…" : "OmaBrief"
     var item = feedItems[tickerIndex % feedItems.length]
     return item ? String(item.title || "OmaBrief") : "OmaBrief"
   }
 
   function serviceRefresh() {
-    if (brief && typeof brief.refresh === "function") brief.refresh()
+    if (omabrief && typeof omabrief.refresh === "function") omabrief.refresh()
   }
 
   // ---- Shape contract for shell.summon/hide/toggle routing.
@@ -63,24 +63,24 @@ BarWidget {
     if ("settings" in target) target.settings = root.settings
     if ("anchorItem" in target) target.anchorItem = button
     if ("hostWidget" in target) target.hostWidget = root
-    if ("brief" in target) target.brief = root.brief
+    if ("omabrief" in target) target.omabrief = root.omabrief
   }
 
   function injectReader() {
     var target = readerLoader.item
     if (!target) return
-    if ("brief" in target) target.brief = root.brief
+    if ("omabrief" in target) target.omabrief = root.omabrief
     if ("bar" in target) target.bar = root.bar
   }
 
   // Push shell.json settings down to the service config + feeds file.
-  // Union-merges feeds added from the popup UI (brief.feedsText) so a
+  // Union-merges feeds added from the popup UI (omabrief.feedsText) so a
   // settings sync never clobbers them; removals of settings-listed feeds
   // must be done in Bar settings.
   function syncConfig() {
-    if (!root.brief) return
+    if (!root.omabrief) return
     var feeds = Model.parseFeeds(setting("feeds", "hn:top:30\nhttps://hackernewsrss.com/feed.xml"))
-    if (root.brief.feedsText) feeds = Model.mergeFeeds(feeds, Model.parseFeeds(root.brief.feedsText, ""))
+    if (root.omabrief.feedsText) feeds = Model.mergeFeeds(feeds, Model.parseFeeds(root.omabrief.feedsText, ""))
     var config = {
       refreshMinutes: Model.clampInt(setting("refreshMinutes", 15), 15, 2, 1440),
       storyCount: Model.clampInt(setting("storyCount", 30), 30, 1, 100),
@@ -91,7 +91,7 @@ BarWidget {
       showScores: setting("showScores", true) !== false,
       feeds: feeds
     }
-    configProc.command = ["bash", root.brief.fetchScript, root.brief.stateDir,
+    configProc.command = ["bash", root.omabrief.fetchScript, root.omabrief.stateDir,
       "write-config", JSON.stringify(config)]
     configProc.running = true
   }
@@ -101,7 +101,7 @@ BarWidget {
 
   onBarChanged: injectPanel()
   onSettingsChanged: { injectPanel(); syncConfig() }
-  onBriefChanged: { injectPanel(); injectReader(); syncConfig() }
+  onOmabriefChanged: { injectPanel(); injectReader(); syncConfig() }
 
   Component.onCompleted: Qt.callLater(syncConfig)
 

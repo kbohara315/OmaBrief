@@ -330,22 +330,22 @@ Item {
     id: aiProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: briefAi.summaryReady(String(text || ""))
+      onStreamFinished: omabriefAi.summaryReady(String(text || ""))
     }
   }
 
   // Fan-out target for the AI summary: set by the reader when it opens.
   QtObject {
-    id: briefAi
+    id: omabriefAi
     signal summaryReady(string text)
   }
-  property alias ai: briefAi
+  property alias ai: omabriefAi
 
   function onSummaryReady(text) {
     root.summary = text
   }
 
-  Component.onCompleted: briefAi.summaryReady.connect(onSummaryReady)
+  Component.onCompleted: omabriefAi.summaryReady.connect(onSummaryReady)
 
   Timer {
     id: pollTimer

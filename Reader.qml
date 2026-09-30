@@ -57,16 +57,16 @@ Item {
       return []
     }
   }
-  readonly property string summaryText: brief ? String(brief.summary || "") : ""
-  readonly property bool aiAvailable: brief ? brief.aiEnabled : false
+  readonly property string summaryText: omabrief ? String(omabrief.summary || "") : ""
+  readonly property bool aiAvailable: omabrief ? omabrief.aiEnabled : false
 
   function openWith(item) {
     root.current = item
     root.mode = "article"
     root.opened = true
-    if (item && root.brief) {
-      root.brief.fetchArticle(item.link)
-      if (item.hnId) root.brief.fetchThread(item.hnId)
+    if (item && root.omabrief) {
+      root.omabrief.fetchArticle(item.link)
+      if (item.hnId) root.omabrief.fetchThread(item.hnId)
     }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -77,31 +77,31 @@ Item {
   }
 
   function openOriginal() {
-    if (root.current && root.brief) {
-      root.brief.markRead(root.current.id)
-      root.brief.openLink(root.current.link)
+    if (root.current && root.omabrief) {
+      root.omabrief.markRead(root.current.id)
+      root.omabrief.openLink(root.current.link)
     }
   }
 
   function openThreadUrl() {
-    if (root.current && root.current.commentsUrl && root.brief)
-      root.brief.openLink(root.current.commentsUrl)
+    if (root.current && root.current.commentsUrl && root.omabrief)
+      root.omabrief.openLink(root.current.commentsUrl)
   }
 
   function requestSummary() {
-    if (!root.brief || !root.aiAvailable || !root.brief.articlePath) return
-    root.brief.summarize(root.brief.articlePath)
+    if (!root.omabrief || !root.aiAvailable || !root.omabrief.articlePath) return
+    root.omabrief.summarize(root.omabrief.articlePath)
   }
 
   property FileView articleFile: FileView {
-    path: root.brief ? String(root.brief.articlePath || "") : ""
+    path: root.omabrief ? String(root.omabrief.articlePath || "") : ""
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
   }
 
   property FileView threadFile: FileView {
-    path: root.brief ? String(root.brief.threadPath || "") : ""
+    path: root.omabrief ? String(root.omabrief.threadPath || "") : ""
     watchChanges: true
     printErrors: false
     onFileChanged: reload()

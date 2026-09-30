@@ -26,8 +26,8 @@ Panel {
   property string addError: ""
   // True between submit and the service reporting back (feedOpSeq bump).
   property bool addPending: false
-  readonly property string opNotice: brief ? String(brief.feedNotice || "") : ""
-  readonly property int opSeq: brief ? (brief.feedOpSeq || 0) : 0
+  readonly property string opNotice: omabrief ? String(omabrief.feedNotice || "") : ""
+  readonly property int opSeq: omabrief ? (omabrief.feedOpSeq || 0) : 0
   onOpSeqChanged: {
     if (root.addPending) {
       root.addPending = false
@@ -39,15 +39,15 @@ Panel {
     }
   }
 
-  readonly property var allItems: brief ? brief.items : []
-  readonly property var readMap: brief ? brief.readIds : ({})
-  readonly property bool useScores: brief ? brief.showScores : true
+  readonly property var allItems: omabrief ? omabrief.items : []
+  readonly property var readMap: omabrief ? omabrief.readIds : ({})
+  readonly property bool useScores: omabrief ? omabrief.showScores : true
   readonly property var visibleItems: Model.filterItems(allItems, root.query, root.feedFilter, root.hideRead, root.readMap)
   readonly property var feeds: Model.feedNames(allItems)
   readonly property var panelFeedKeys: {
-    if (!brief || !brief.panelFeedsText) return ({})
+    if (!omabrief || !omabrief.panelFeedsText) return ({})
     var keys = {}
-    var lines = Model.parseFeeds(brief.panelFeedsText, "")
+    var lines = Model.parseFeeds(omabrief.panelFeedsText, "")
     for (var i = 0; i < lines.length; i++) {
       var k = Model.feedKey(lines[i])
       if (k) keys[k] = true
@@ -55,17 +55,17 @@ Panel {
     return keys
   }
   readonly property var failedFeeds: {
-    if (!brief || !brief.feedHealth) return []
+    if (!omabrief || !omabrief.feedHealth) return []
     var out = []
-    for (var i = 0; i < brief.feedHealth.length; i++) {
-      if (brief.feedHealth[i] && brief.feedHealth[i].ok === false) out.push(brief.feedHealth[i].feed)
+    for (var i = 0; i < omabrief.feedHealth.length; i++) {
+      if (omabrief.feedHealth[i] && omabrief.feedHealth[i].ok === false) out.push(omabrief.feedHealth[i].feed)
     }
     return out
   }
-  readonly property int unreadTotal: brief ? brief.unread : 0
+  readonly property int unreadTotal: omabrief ? omabrief.unread : 0
   readonly property string updatedLabel: {
-    if (!brief || !brief.updatedAt) return "never updated"
-    return "updated " + Model.relativeTime(brief.updatedAt)
+    if (!omabrief || !omabrief.updatedAt) return "never updated"
+    return "updated " + Model.relativeTime(omabrief.updatedAt)
   }
 
   readonly property color contentForeground: bar ? bar.foreground : Color.foreground
@@ -99,9 +99,9 @@ Panel {
   function openCurrent() {
     var item = currentItem()
     if (!item) return
-    if (brief) {
-      brief.markRead(item.id)
-      brief.openLink(item.link)
+    if (omabrief) {
+      omabrief.markRead(item.id)
+      omabrief.openLink(item.link)
     }
     root.close()
   }
@@ -109,15 +109,15 @@ Panel {
   function openThread(item) {
     var target = item || currentItem()
     if (!target) return
-    if (brief) brief.markRead(target.id)
+    if (omabrief) omabrief.markRead(target.id)
     if (root.hostWidget && typeof root.hostWidget.openReader === "function")
       root.hostWidget.openReader(target)
   }
 
   // Source line in feeds.txt backing a displayed feed label (for remove).
   function feedSourceFor(label) {
-    if (!brief || !brief.feedsText) return ""
-    var lines = Model.parseFeeds(brief.feedsText, "")
+    if (!omabrief || !omabrief.feedsText) return ""
+    var lines = Model.parseFeeds(omabrief.feedsText, "")
     for (var i = 0; i < lines.length; i++) {
       if (Model.feedLabel(lines[i]) === label) return lines[i]
     }
@@ -144,12 +144,12 @@ Panel {
       return
     }
     var line = label !== "" ? label + " | " + url : url
-    if (!brief || typeof brief.addFeed !== "function") {
+    if (!omabrief || typeof omabrief.addFeed !== "function") {
       root.addError = "Service not ready — try again in a moment."
       return
     }
     root.addPending = true
-    brief.addFeed(line)
+    omabrief.addFeed(line)
   }
 
   function moveSelection(delta) {
@@ -190,8 +190,8 @@ Panel {
         if (t === "/") root.focusSearch()
         else if (t === "j") root.moveSelection(1)
         else if (t === "k") root.moveSelection(-1)
-        else if (t === "r" || t === "R") { if (root.brief) root.brief.refresh() }
-        else if (t === "a" || t === "A") { if (root.brief) root.brief.markAllRead() }
+        else if (t === "r" || t === "R") { if (root.omabrief) root.omabrief.refresh() }
+        else if (t === "a" || t === "A") { if (root.omabrief) root.omabrief.markAllRead() }
         else if (t === "c" || t === "C") root.openThread(null)
         else if (t === "u" || t === "U") root.hideRead = !root.hideRead
       }
@@ -233,7 +233,7 @@ Panel {
             tooltipText: "Refresh now (r)"
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
-            onClicked: { if (root.brief) root.brief.refresh() }
+            onClicked: { if (root.omabrief) root.omabrief.refresh() }
           }
 
           PanelActionButton {
@@ -242,7 +242,7 @@ Panel {
             tooltipText: "Mark all read (a)"
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
-            onClicked: { if (root.brief) root.brief.markAllRead() }
+            onClicked: { if (root.omabrief) root.omabrief.markAllRead() }
           }
 
           PanelActionButton {
@@ -341,9 +341,9 @@ Panel {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                       var src = root.feedSourceFor(modelData)
-                      if (src && root.brief) {
+                      if (src && root.omabrief) {
                         if (root.feedFilter === modelData) root.feedFilter = ""
-                        root.brief.removeFeed(src)
+                        root.omabrief.removeFeed(src)
                       }
                     }
                   }
@@ -535,7 +535,7 @@ Panel {
           Text {
             textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
-            text: root.updatedLabel + (root.brief && root.brief.refreshing ? " · fetching…" : "")
+            text: root.updatedLabel + (root.omabrief && root.omabrief.refreshing ? " · fetching…" : "")
               + (root.failedFeeds.length > 0 ? " · " + root.failedFeeds.length + " feed failed" + (root.failedFeeds.length > 1 ? "s" : "") : "")
             color: Qt.darker(root.contentForeground, 1.6)
             font.family: root.contentFontFamily
